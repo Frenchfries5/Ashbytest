@@ -10,6 +10,7 @@ export interface RecruiterRow {
 export interface WeekData {
   id?: number
   label: string
+  weekStart?: string // ISO date (YYYY-MM-DD) of the week's Monday; used for monthly grouping
   rows: RecruiterRow[]
 }
 

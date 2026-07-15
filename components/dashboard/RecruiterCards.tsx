@@ -38,7 +38,7 @@ export function RecruiterCards({ weeks }: RecruiterCardsProps) {
             return row ?? null
           })
 
-          const replyRates = perWeek.map((r) => (r ? replyRate(r.replies, r.messages) : 0))
+          const replyRates = perWeek.map((r) => (r ? replyRate(r.replies, r.invites) : 0))
           const acceptRates = perWeek.map((r) => (r ? acceptRate(r.accepted, r.invites) : 0))
           const totalInvites = perWeek.reduce((s, r) => s + (r?.invites ?? 0), 0)
           const totalReplies = perWeek.reduce((s, r) => s + (r?.replies ?? 0), 0)

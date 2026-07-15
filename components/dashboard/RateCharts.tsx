@@ -64,7 +64,7 @@ function RateChart({
 export function RateCharts({ weeks }: RateChartsProps) {
   const replyData = weeks.map((w) => {
     const agg = aggregateWeek(w)
-    return { label: w.label, value: replyRate(agg.replies, agg.messages) }
+    return { label: w.label, value: replyRate(agg.replies, agg.invites) }
   })
   const acceptData = weeks.map((w) => {
     const agg = aggregateWeek(w)
