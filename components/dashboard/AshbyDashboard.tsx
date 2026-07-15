@@ -96,18 +96,21 @@ export async function fetchAshbyWeekly(): Promise<AshbyRow[]> {
   return parseCSV(csv)
 }
 
-type RangeId = 'all' | 'ytd' | 'last90'
+type RangeId = 'all' | 'last90' | 'last30'
 
 interface Range { id: RangeId; label: string; from?: Date; to?: Date }
 
+// Narrowing windows that always differ from one another, regardless of how much
+// history exists. (An earlier "YTD" option was dropped: with all data inside a single
+// calendar year it was identical to "All time", so two of three buttons did nothing.)
 function buildRanges(): Range[] {
   const now = new Date()
-  const ytdStart = new Date(now.getFullYear(), 0, 1)
-  const last90   = new Date(now); last90.setDate(now.getDate() - 90)
+  const last90 = new Date(now); last90.setDate(now.getDate() - 90)
+  const last30 = new Date(now); last30.setDate(now.getDate() - 30)
   return [
     { id: 'all',    label: 'All time' },
-    { id: 'ytd',    label: 'YTD',      from: ytdStart },
     { id: 'last90', label: 'Last 90d', from: last90 },
+    { id: 'last30', label: 'Last 30d', from: last30 },
   ]
 }
 
