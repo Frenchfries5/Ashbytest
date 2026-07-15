@@ -3,7 +3,7 @@ import {
   ashbyConfigured,
   listApplicationsSince,
   listOpenJobs,
-  isRelevantStage,
+  isRelevantApplication,
 } from '@/lib/ashby'
 
 export const dynamic = 'force-dynamic'
@@ -64,7 +64,7 @@ export async function GET() {
       const key = start.getTime()
       const b = buckets.get(key) ?? { date: start, applicants: 0, relevant: 0 }
       b.applicants += 1
-      if (isRelevantStage(a.stage)) b.relevant += 1
+      if (isRelevantApplication(a)) b.relevant += 1
       buckets.set(key, b)
     }
 

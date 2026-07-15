@@ -26,6 +26,27 @@ const ASHBY_BASE = 'https://api.ashbyhq.com'
 // This is the single knob to retune.
 export const RELEVANT_STAGE_TYPES = new Set(['Active', 'Offer', 'Hired'])
 
+// Once an application is Archived, its currentInterviewStage.type flips to "Archived" —
+// erasing how far it actually got. Walking full stage history to recover that is too slow
+// to do in bulk (a 20-way parallel batch of application.info calls took ~3.7s; a job with a
+// few hundred archived applicants would take 30-60s+, unworkable for a route that also
+// auto-revalidates every few minutes). archiveReason is already fetched for free and is a
+// solid proxy for "did a human engage them past initial review before rejecting."
+// Confirmed reasons that only occur after a candidate has been screened/interviewed:
+const RELEVANT_ARCHIVE_REASON_PATTERNS: RegExp[] = [
+  /no show/i,                 // scheduled for an interview
+  /compensation/i,            // comp is discussed at interview/offer stage
+  /accepted other offer/i,    // got far enough to have competing offers
+  /interviewing for another role/i,
+  /timing not aligned/i,
+  /role not aligned/i,        // learned during a conversation, not from the resume alone
+  /strong candidate/i,        // explicit finalist language
+]
+export function isRelevantArchiveReason(reason: string | null): boolean {
+  if (!reason) return false
+  return RELEVANT_ARCHIVE_REASON_PATTERNS.some((re) => re.test(reason))
+}
+
 // A role is flagged "stalled" when its oldest active candidate has sat this many days.
 export const STALLED_DAYS = 30
 
@@ -181,6 +202,7 @@ export interface Application {
   stage: Stage | null
   source: string | null
   owner: string | null
+  archiveReason: string | null
 }
 
 export interface Candidate {
@@ -276,6 +298,7 @@ function normalizeApplication(a: RawApplication): Application {
     stage: normalizeStage(a.currentInterviewStage),
     source: normalizeSource(a.source),
     owner: normalizeOwner(a.creditedToUser),
+    archiveReason: normalizeArchiveReason(a.archiveReason),
   }
 }
 
@@ -348,6 +371,18 @@ export function orderStageNames(names: Iterable<string>): string[] {
 export function isRelevantStage(stage: Stage | null): boolean {
   if (!stage?.type) return false
   return RELEVANT_STAGE_TYPES.has(stage.type)
+}
+
+// Full relevance check for an application across ANY status. For Active/Lead/Hired,
+// current stage is accurate and used directly. For Archived, current stage has decayed to
+// "Archived" regardless of how far the candidate got, so we fall back to archiveReason —
+// otherwise every application eventually reads as "not relevant" once resolved, which is
+// what caused historical weeks to trend toward 0% relevance as their cohorts got archived.
+export function isRelevantApplication(a: { status: string | null; stage: Stage | null; archiveReason: string | null }): boolean {
+  if (a.status === 'Hired') return true
+  if (isRelevantStage(a.stage)) return true
+  if (a.status === 'Archived') return isRelevantArchiveReason(a.archiveReason)
+  return false
 }
 
 // ── Typed wrappers ──────────────────────────────────────────────────────────────
