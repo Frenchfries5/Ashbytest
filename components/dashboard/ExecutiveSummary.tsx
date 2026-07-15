@@ -147,7 +147,8 @@ function Tile({
 
 // ── main ─────────────────────────────────────────────────────────────────────
 export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inbound' | 'ashby') => void }) {
-  const { data: weeksRes } = useSWR<{ weeks: WeekData[] }>('/api/data', jsonFetcher)
+  // Outbound is sourced from MeetAlfred (synced to Supabase), not the manual spreadsheet.
+  const { data: weeksRes } = useSWR<{ weeks: WeekData[] }>('/api/meetalfred/sourcing', jsonFetcher)
   const { data: ashbyData } = useSWR<AshbyWeek[]>('ashby-weekly:summary', fetchAshbyWeeks, { refreshInterval: 300_000 })
 
   const weeks: WeekData[] = weeksRes?.weeks?.length ? weeksRes.weeks : SEED_WEEKS
@@ -159,8 +160,8 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
   const oPrev = agg.length > 1 ? agg[agg.length - 2] : null
   const oLabel = weeks[weeks.length - 1]?.label ?? ''
 
-  const oReplyRate = replyRate(oNow.replies, oNow.messages)
-  const oReplyRatePrev = oPrev ? replyRate(oPrev.replies, oPrev.messages) : null
+  const oReplyRate = replyRate(oNow.replies, oNow.invites)
+  const oReplyRatePrev = oPrev ? replyRate(oPrev.replies, oPrev.invites) : null
   const oAcceptRate = acceptRate(oNow.accepted, oNow.invites)
 
   // ── Inbound / Ashby (latest vs prior week) ──
@@ -244,7 +245,7 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
             sub={oPrev ? `${signed(oNow.replies - oPrev.replies)} vs last week` : 'first week'} />
           <Tile label="Reply rate" value={`${fmt1(oReplyRate)}%`}
             delta={<Delta pts={oReplyRatePrev !== null ? oReplyRate - oReplyRatePrev : null} />}
-            sub="replies / messages" />
+            sub="replies / invites" />
           <Tile label="Accept rate" value={`${fmt1(oAcceptRate)}%`} sub="connections accepted" />
         </div>
       </div>

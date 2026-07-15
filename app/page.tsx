@@ -21,7 +21,10 @@ type TopTab = 'exec' | 'sourcing' | 'inbound' | 'ashby' | 'pipeline'
 
 export default function DashboardPage() {
   const [tab, setTab] = useState<TopTab>('exec')
-  const { data, isLoading } = useSWR<{ weeks: WeekData[] }>('/api/data', fetcher)
+  // Outbound Sourcing is now sourced from MeetAlfred (synced into Supabase), not the manual
+  // spreadsheet. /api/meetalfred/sourcing returns the same WeekData[] shape the components
+  // expect. Falls back to SEED_WEEKS only if the DB is empty (e.g. never synced).
+  const { data, isLoading } = useSWR<{ weeks: WeekData[] }>('/api/meetalfred/sourcing', fetcher)
 
   // Warm every tab's data on first load (SWR dedupes by key), so switching tabs feels
   // instant instead of kicking off a slow Ashby fetch only once its tab is opened.

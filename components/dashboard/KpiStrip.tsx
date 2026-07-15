@@ -39,9 +39,9 @@ export function KpiStrip({ weeks }: KpiStripProps) {
   const prior = aggregated.length > 1 ? aggregated[aggregated.length - 2] : null
 
   const latestAccept = acceptRate(latest.accepted, latest.invites)
-  const latestReply = replyRate(latest.replies, latest.messages)
+  const latestReply = replyRate(latest.replies, latest.invites)
   const priorAccept = prior ? acceptRate(prior.accepted, prior.invites) : null
-  const priorReply = prior ? replyRate(prior.replies, prior.messages) : null
+  const priorReply = prior ? replyRate(prior.replies, prior.invites) : null
 
   const kpis = [
     {
@@ -62,7 +62,7 @@ export function KpiStrip({ weeks }: KpiStripProps) {
       label: 'Reply Rate',
       value: `${fmt1(latestReply)}%`,
       delta: priorReply !== null ? latestReply - priorReply : null,
-      spark: aggregated.map((a) => replyRate(a.replies, a.messages)),
+      spark: aggregated.map((a) => replyRate(a.replies, a.invites)),
       color: '#c98a1a',
     },
     {
