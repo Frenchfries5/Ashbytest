@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/meetalfred/sync",
-      "schedule": "0 * * * *"
+      "schedule": "0 6 * * *"
     }
   ]
 }
