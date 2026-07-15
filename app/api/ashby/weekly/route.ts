@@ -14,12 +14,20 @@ const HISTORY_DAYS = 365
 // Matches the evergreen "perpetual job listing" the Ashby Inbound tab tracks.
 const EVERGREEN_TITLE = /general interest|evergreen|talent (community|pool|network)|inbound/i
 
+// Coverdash's designated evergreen inbound posting ("Commercial Insurance Broker, Growth").
+// Its title does NOT match EVERGREEN_TITLE, so pin its id as the committed default. Without
+// this, a deployment that lacks the ASHBY_INBOUND_JOB_ID env var (e.g. Vercel, since the var
+// lives only in gitignored .env.local) would auto-detect the wrong "General Interest" job —
+// which only has ~3 months of history and made the Inbound tab appear to start in April.
+const DEFAULT_INBOUND_JOB_ID = '824849e5-2410-439d-8f26-e9d818019ad2'
+
 // The Ashby Inbound tab is about ONE evergreen posting, not every req (that would also
 // wrongly fold in outbound-sourced candidates and pull thousands of rows). Resolve the job:
-// explicit env override first, else auto-detect the evergreen posting among open jobs.
+// explicit env override → committed default (the Growth job) → regex auto-detect fallback.
 async function resolveInboundJobId(): Promise<string | undefined> {
   const explicit = process.env.ASHBY_INBOUND_JOB_ID
   if (explicit) return explicit
+  if (DEFAULT_INBOUND_JOB_ID) return DEFAULT_INBOUND_JOB_ID
   const jobs = await listOpenJobs()
   return jobs.find((j) => EVERGREEN_TITLE.test(j.title))?.id
 }
