@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import useSWR, { preload } from 'swr'
-import { WeekData, SEED_WEEKS } from '@/lib/types'
+import { WeekData } from '@/lib/types'
 import { Topbar } from '@/components/dashboard/Topbar'
 import { KpiStrip } from '@/components/dashboard/KpiStrip'
 import { TrendsChart } from '@/components/dashboard/TrendsChart'
@@ -20,9 +20,8 @@ type TopTab = 'exec' | 'sourcing' | 'inbound' | 'ashby' | 'pipeline'
 
 export default function DashboardPage() {
   const [tab, setTab] = useState<TopTab>('exec')
-  // Outbound Sourcing is now sourced from MeetAlfred (synced into Supabase), not the manual
-  // spreadsheet. /api/meetalfred/sourcing returns the same WeekData[] shape the components
-  // expect. Falls back to SEED_WEEKS only if the DB is empty (e.g. never synced).
+  // Outbound Sourcing is sourced from MeetAlfred (synced into Supabase), not the manual
+  // spreadsheet. /api/meetalfred/sourcing returns the same WeekData[] shape the components expect.
   const { data, isLoading } = useSWR<{ weeks: WeekData[] }>('/api/meetalfred/sourcing', fetcher)
 
   // Warm every tab's data on first load (SWR dedupes by key), so switching tabs feels
@@ -34,8 +33,7 @@ export default function DashboardPage() {
     preload('/api/inbound/postings', fetcher)
   }, [])
 
-  const weeks: WeekData[] =
-    data?.weeks && data.weeks.length > 0 ? data.weeks : SEED_WEEKS
+  const weeks: WeekData[] = data?.weeks ?? []
 
   const firstLabel = weeks[0]?.label ?? ''
   const lastLabel = weeks[weeks.length - 1]?.label ?? ''

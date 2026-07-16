@@ -8,7 +8,7 @@ import {
 } from 'recharts'
 import { Mail, ArrowUpRight, ArrowDownRight, Minus } from 'lucide-react'
 import {
-  WeekData, SEED_WEEKS, aggregateWeek, acceptRate, replyRate, fmt1,
+  WeekData, aggregateWeek, acceptRate, replyRate, fmt1,
 } from '@/lib/types'
 
 // ── fetchers ─────────────────────────────────────────────────────────────────
@@ -40,45 +40,18 @@ function weekFromParts(fullLabel: string, applicants: number, relevant: number):
   return { weekOf, label: `${MON_SHORT[MONTHS[mon] ?? 0]} ${parseInt(day)}`, applicants, relevant }
 }
 
-function parseAshby(raw: string): AshbyWeek[] {
-  const lines = raw.replace(/\r/g, '').trim().split('\n').slice(1)
-  const rows: AshbyWeek[] = []
-  for (const line of lines) {
-    if (!line.trim()) continue
-    const cols: string[] = []
-    let cur = '', inQ = false
-    for (const ch of line) {
-      if (ch === '"') { inQ = !inQ; continue }
-      if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; continue }
-      cur += ch
-    }
-    cols.push(cur.trim())
-    const row = weekFromParts(cols[0] ?? '', parseInt(cols[1]) || 0, parseInt(cols[2]) || 0)
-    if (row) rows.push(row)
-  }
-  return rows.sort((a, b) => a.weekOf.getTime() - b.weekOf.getTime())
-}
-
 interface WeeklyRow { fullLabel: string; applicants: number; relevant: number }
 
-// Prefer the live Ashby API; fall back to the published-sheet CSV when the key is unset.
+// Live Ashby weekly data. Returns [] if Ashby isn't configured.
 export async function fetchAshbyWeeks(): Promise<AshbyWeek[]> {
-  try {
-    const res = await fetch('/api/ashby/weekly')
-    if (res.ok) {
-      const json = (await res.json()) as { configured?: boolean; rows?: WeeklyRow[] }
-      if (json.configured && Array.isArray(json.rows)) {
-        return json.rows
-          .map(r => weekFromParts(r.fullLabel, r.applicants || 0, r.relevant || 0))
-          .filter((r): r is AshbyWeek => r !== null)
-          .sort((a, b) => a.weekOf.getTime() - b.weekOf.getTime())
-      }
-    }
-  } catch {
-    // fall through to CSV
-  }
-  const csv = await fetch('/api/ashby').then(r => r.text())
-  return parseAshby(csv)
+  const res = await fetch('/api/ashby/weekly')
+  if (!res.ok) return []
+  const json = (await res.json()) as { configured?: boolean; rows?: WeeklyRow[] }
+  if (!json.configured || !Array.isArray(json.rows)) return []
+  return json.rows
+    .map(r => weekFromParts(r.fullLabel, r.applicants || 0, r.relevant || 0))
+    .filter((r): r is AshbyWeek => r !== null)
+    .sort((a, b) => a.weekOf.getTime() - b.weekOf.getTime())
 }
 
 // ── small helpers ────────────────────────────────────────────────────────────
@@ -151,12 +124,13 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
   const { data: weeksRes } = useSWR<{ weeks: WeekData[] }>('/api/meetalfred/sourcing', jsonFetcher)
   const { data: ashbyData } = useSWR<AshbyWeek[]>('ashby-weekly:summary', fetchAshbyWeeks, { refreshInterval: 300_000 })
 
-  const weeks: WeekData[] = weeksRes?.weeks?.length ? weeksRes.weeks : SEED_WEEKS
+  const weeks: WeekData[] = weeksRes?.weeks ?? []
   const ashby = ashbyData ?? []
 
   // ── Outbound (latest vs prior week) ──
   const agg = weeks.map(aggregateWeek)
-  const oNow = agg[agg.length - 1]
+  // Default to zeros while data loads / when there are no weeks (no more SEED_WEEKS fallback).
+  const oNow = agg[agg.length - 1] ?? { invites: 0, accepted: 0, messages: 0, replies: 0 }
   const oPrev = agg.length > 1 ? agg[agg.length - 2] : null
   const oLabel = weeks[weeks.length - 1]?.label ?? ''
 

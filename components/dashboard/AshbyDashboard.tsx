@@ -50,50 +50,18 @@ function rowFromParts(fullLabel: string, applicants: number, relevant: number): 
   return { weekOf, weekLabel, fullLabel, applicants, relevant }
 }
 
-function parseCSV(raw: string): AshbyRow[] {
-  // Normalize line endings, skip header
-  const lines = raw.replace(/\r/g, '').trim().split('\n').slice(1)
-  const rows: AshbyRow[] = []
-  for (const line of lines) {
-    if (!line.trim()) continue
-    // Handle quoted fields like "January 12, 2026"
-    const cols: string[] = []
-    let cur = ''
-    let inQuote = false
-    for (const ch of line) {
-      if (ch === '"') { inQuote = !inQuote; continue }
-      if (ch === ',' && !inQuote) { cols.push(cur.trim()); cur = ''; continue }
-      cur += ch
-    }
-    cols.push(cur.trim())
-
-    const row = rowFromParts(cols[0], parseInt(cols[1]) || 0, parseInt(cols[2]) || 0)
-    if (row) rows.push(row)
-  }
-  return rows.sort((a, b) => a.weekOf.getTime() - b.weekOf.getTime())
-}
-
 interface WeeklyRow { fullLabel: string; applicants: number; relevant: number }
 
-// Prefer the live Ashby API (/api/ashby/weekly). If the key isn't configured yet, the route
-// returns { configured: false } and we fall back to the published-sheet CSV (/api/ashby).
+// Live Ashby weekly data (/api/ashby/weekly). Returns [] if Ashby isn't configured.
 export async function fetchAshbyWeekly(): Promise<AshbyRow[]> {
-  try {
-    const res = await fetch('/api/ashby/weekly')
-    if (res.ok) {
-      const json = (await res.json()) as { configured?: boolean; rows?: WeeklyRow[] }
-      if (json.configured && Array.isArray(json.rows)) {
-        return json.rows
-          .map(r => rowFromParts(r.fullLabel, r.applicants || 0, r.relevant || 0))
-          .filter((r): r is AshbyRow => r !== null)
-          .sort((a, b) => a.weekOf.getTime() - b.weekOf.getTime())
-      }
-    }
-  } catch {
-    // fall through to CSV
-  }
-  const csv = await fetch('/api/ashby').then(r => r.text())
-  return parseCSV(csv)
+  const res = await fetch('/api/ashby/weekly')
+  if (!res.ok) return []
+  const json = (await res.json()) as { configured?: boolean; rows?: WeeklyRow[] }
+  if (!json.configured || !Array.isArray(json.rows)) return []
+  return json.rows
+    .map(r => rowFromParts(r.fullLabel, r.applicants || 0, r.relevant || 0))
+    .filter((r): r is AshbyRow => r !== null)
+    .sort((a, b) => a.weekOf.getTime() - b.weekOf.getTime())
 }
 
 type RangeId = 'all' | 'last90' | 'last30'
