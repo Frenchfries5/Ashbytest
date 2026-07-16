@@ -291,12 +291,13 @@ function HiredSection({ analysis }: { analysis: AnalysisResponse | undefined }) 
   if (!analysis) return null // still loading — SourcesSection shows the loading state
   if (!hired.length) return null
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
+    <details className="flex flex-col gap-2">
+      <summary className="flex items-center gap-2 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+        <span className="font-mono text-[9px]" style={{ color: C.dim }}>▶</span>
         <span className="font-mono text-[11px] uppercase tracking-wider" style={{ color: C.text }}>Hired</span>
         <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: '#1a9e6e22', color: '#1a9e6e' }}>{hired.length}</span>
-      </div>
-      <div className="rounded-lg p-3 flex flex-col gap-1.5" style={{ ...CARD, borderColor: '#1a9e6e44' }}>
+      </summary>
+      <div className="rounded-lg p-3 flex flex-col gap-1.5 mt-2" style={{ ...CARD, borderColor: '#1a9e6e44' }}>
         {hired.map((h, i) => (
           <div key={`${h.name}-${i}`} className="flex items-center justify-between gap-3">
             <span className="text-sm truncate" style={{ color: C.text }}>{h.name}</span>
@@ -304,7 +305,7 @@ function HiredSection({ analysis }: { analysis: AnalysisResponse | undefined }) 
           </div>
         ))}
       </div>
-    </div>
+    </details>
   )
 }
 
