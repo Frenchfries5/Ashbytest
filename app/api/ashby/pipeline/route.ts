@@ -2,14 +2,21 @@ import { NextResponse } from 'next/server'
 import {
   ashbyConfigured,
   listOpenJobs,
+  listClosedJobs,
   listActiveApplications,
+  listAllJobApplications,
   isRelevantStage,
+  isRelevantApplication,
   orderStageNames,
+  mapLimit,
   STALLED_DAYS,
   type Stage,
 } from '@/lib/ashby'
 
 export const dynamic = 'force-dynamic'
+// The closed-roles view fans out full-funnel pulls across every closed job (thousands of
+// archived apps), so it can take ~30s. Raise the ceiling (Vercel Hobby caps at 60s).
+export const maxDuration = 60
 
 interface RoleStages {
   [stageName: string]: number
@@ -46,12 +53,85 @@ function daysSince(iso: string | null): number | null {
   return Math.max(0, Math.floor((Date.now() - t) / DAY))
 }
 
-export async function GET() {
+// Closed/Archived roles: post-hoc outcome summary per role (total applicants, hired, archived,
+// top source, top rejection reason). Full source/rejection detail is in the drawer's analysis.
+async function closedPipeline() {
+  const jobs = await listClosedJobs()
+  const perJob = await mapLimit(jobs, 4, async (j) => ({ job: j, apps: await listAllJobApplications(j.id) }))
+
+  const roles = perJob.map(({ job, apps }) => {
+    const hired = apps.filter((a) => a.status === 'Hired').length
+    const archived = apps.filter((a) => a.status === 'Archived').length
+    const relevant = apps.filter((a) => isRelevantApplication(a)).length
+
+    const srcCounts = new Map<string, number>()
+    for (const a of apps) if (a.source) srcCounts.set(a.source, (srcCounts.get(a.source) ?? 0) + 1)
+    let topSource: string | null = null, topN = 0
+    for (const [s, n] of srcCounts) if (n > topN) { topN = n; topSource = s }
+
+    const reasonCounts = new Map<string, number>()
+    for (const a of apps) if (a.status === 'Archived') { const r = a.archiveReason ?? 'No reason given'; reasonCounts.set(r, (reasonCounts.get(r) ?? 0) + 1) }
+    let topArchiveReason: string | null = null, topR = 0
+    for (const [r, n] of reasonCounts) if (n > topR) { topR = n; topArchiveReason = r }
+
+    return {
+      id: job.id,
+      title: job.title,
+      status: job.status,
+      department: job.department,
+      location: job.location,
+      employmentType: job.employmentType,
+      openedAt: job.openedAt,
+      daysOpen: daysSince(job.openedAt),
+      openings: job.openings,
+      recruiter: job.recruiter,
+      total: apps.length,
+      hired,
+      archived,
+      relevant,
+      topSource,
+      topArchiveReason,
+      // Fields the shared Role/drawer shape expects, N/A for closed roles:
+      stages: {} as RoleStages,
+      oldestActiveDays: null,
+      idleDays: null,
+      newThisWeek: 0,
+      owners: [] as { name: string; count: number }[],
+      stalled: false,
+    }
+  }).sort((a, b) => b.total - a.total)
+
+  const totals = {
+    closedRoles: roles.length,
+    totalApplicants: roles.reduce((s, r) => s + r.total, 0),
+    hired: roles.reduce((s, r) => s + r.hired, 0),
+    archived: roles.reduce((s, r) => s + r.archived, 0),
+    relevant: roles.reduce((s, r) => s + r.relevant, 0),
+  }
+
+  return NextResponse.json(
+    { configured: true, view: 'closed', generatedAt: new Date().toISOString(), stageOrder: [], totals, roles },
+    { headers: { 'Cache-Control': 'no-store' } }
+  )
+}
+
+export async function GET(req: Request) {
   if (!ashbyConfigured()) {
     return NextResponse.json(
       { configured: false, generatedAt: new Date().toISOString(), stageOrder: [], totals: null, roles: [] },
       { headers: { 'Cache-Control': 'no-store' } }
     )
+  }
+
+  if (new URL(req.url).searchParams.get('status') === 'closed') {
+    try {
+      return await closedPipeline()
+    } catch (err) {
+      return NextResponse.json(
+        { configured: true, view: 'closed', error: String(err instanceof Error ? err.message : err), roles: [] },
+        { status: 502, headers: { 'Cache-Control': 'no-store' } }
+      )
+    }
   }
 
   try {
@@ -151,7 +231,7 @@ export async function GET() {
     }
 
     return NextResponse.json(
-      { configured: true, generatedAt: new Date().toISOString(), stageOrder, totals, roles },
+      { configured: true, view: 'open', generatedAt: new Date().toISOString(), stageOrder, totals, roles },
       { headers: { 'Cache-Control': 'no-store' } }
     )
   } catch (err) {

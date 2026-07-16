@@ -395,6 +395,17 @@ export async function listOpenJobs(): Promise<Job[]> {
   return raw.map((j) => normalizeJob(j, depts, locs))
 }
 
+// Closed + Archived jobs — for the Pipeline tab's "closed roles" view (post-hoc source &
+// rejection analysis on finished searches).
+export async function listClosedJobs(): Promise<Job[]> {
+  const [raw, depts, locs] = await Promise.all([
+    ashbyPaginate<RawJob>('job.list', { status: ['Closed', 'Archived'], limit: 100, expand: ['openings'] }),
+    idNameMap('department.list'),
+    idNameMap('location.list'),
+  ])
+  return raw.map((j) => normalizeJob(j, depts, locs))
+}
+
 // application.list takes a single status string. Fetch the given statuses and merge.
 async function listApplicationsByStatus(status: string, jobId?: string): Promise<RawApplication[]> {
   const body: Record<string, unknown> = { status, limit: 100 }

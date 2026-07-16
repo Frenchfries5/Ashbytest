@@ -45,15 +45,26 @@ interface Role {
   topSource: string | null
   owners: { name: string; count: number }[]
   stalled: boolean
+  // Closed-role outcome fields (present when view === 'closed').
+  hired?: number
+  archived?: number
+  topArchiveReason?: string | null
 }
 interface Totals {
-  openRoles: number
-  activeCandidates: number
+  // open view
+  openRoles?: number
+  activeCandidates?: number
   relevant: number
-  stalled: number
+  stalled?: number
+  // closed view
+  closedRoles?: number
+  totalApplicants?: number
+  hired?: number
+  archived?: number
 }
 interface PipelineResponse {
   configured: boolean
+  view?: 'open' | 'closed'
   generatedAt?: string
   stageOrder?: string[]
   totals?: Totals | null
@@ -298,10 +309,11 @@ function RejectionsSection({ analysis }: { analysis: AnalysisResponse | undefine
 }
 
 // ── role detail drawer ────────────────────────────────────────────────────────────
-function RoleDetailDrawer({ roleId, fallback, colorMap, onClose }: {
+function RoleDetailDrawer({ roleId, fallback, colorMap, closed, onClose }: {
   roleId: string
   fallback: Role
   colorMap: Record<string, string>
+  closed: boolean
   onClose: () => void
 }) {
   const { data, isLoading } = useSWR<JobDetailResponse>(`/api/ashby/job/${roleId}`, fetcher)
@@ -361,11 +373,24 @@ function RoleDetailDrawer({ roleId, fallback, colorMap, onClose }: {
             </button>
           </div>
           <div className="mt-4 flex items-center gap-6">
-            <div><span className="text-xl font-medium" style={{ color: C.blue }}>{total}</span><span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>active</span></div>
-            <div><span className="text-xl font-medium" style={{ color: C.greenL }}>{relevant}</span><span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>relevant</span></div>
-            <div className="ml-auto font-mono text-[11px]" style={{ color: C.dim }}>
-              {job.recruiter ? `Recruiter · ${job.recruiter}` : ''}{job.daysOpen !== null ? ` · Open ${job.daysOpen}d` : ''}
-            </div>
+            {closed ? (
+              <>
+                <div><span className="text-xl font-medium" style={{ color: C.blue }}>{analysis?.totalApplicants ?? fallback.total}</span><span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>applicants</span></div>
+                <div><span className="text-xl font-medium" style={{ color: C.greenL }}>{fallback.hired ?? 0}</span><span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>hired</span></div>
+                <div><span className="text-xl font-medium" style={{ color: C.muted }}>{fallback.archived ?? 0}</span><span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>archived</span></div>
+                <div className="ml-auto font-mono text-[11px]" style={{ color: C.dim }}>
+                  {job.recruiter ? `Recruiter · ${job.recruiter} · ` : ''}{job.status ?? 'Closed'}
+                </div>
+              </>
+            ) : (
+              <>
+                <div><span className="text-xl font-medium" style={{ color: C.blue }}>{total}</span><span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>active</span></div>
+                <div><span className="text-xl font-medium" style={{ color: C.greenL }}>{relevant}</span><span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>relevant</span></div>
+                <div className="ml-auto font-mono text-[11px]" style={{ color: C.dim }}>
+                  {job.recruiter ? `Recruiter · ${job.recruiter}` : ''}{job.daysOpen !== null ? ` · Open ${job.daysOpen}d` : ''}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -432,19 +457,22 @@ function RoleDetailDrawer({ roleId, fallback, colorMap, onClose }: {
 }
 
 // ── sort ──────────────────────────────────────────────────────────────────────────
-type SortKey = 'title' | 'total' | 'relevant' | 'newThisWeek' | 'daysOpen' | 'idleDays'
+type SortKey = 'title' | 'total' | 'relevant' | 'newThisWeek' | 'daysOpen' | 'idleDays' | 'hired' | 'archived'
 
 // ── main ────────────────────────────────────────────────────────────────────────────
 export function PipelineDashboard() {
-  const { data, isLoading, error } = useSWR<PipelineResponse>('/api/ashby/pipeline', fetcher, { refreshInterval: 300_000 })
+  const [view, setView] = useState<'open' | 'closed'>('open')
+  const swrKey = `/api/ashby/pipeline${view === 'closed' ? '?status=closed' : ''}`
+  const { data, isLoading, error } = useSWR<PipelineResponse>(swrKey, fetcher, { refreshInterval: 300_000 })
   const [refreshing, setRefreshing] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('total')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null)
+  const closed = view === 'closed'
 
   async function handleRefresh() {
     setRefreshing(true)
-    await globalMutate('/api/ashby/pipeline')
+    await globalMutate(swrKey)
     setRefreshing(false)
   }
 
@@ -497,34 +525,63 @@ export function PipelineDashboard() {
         <div>
           <h2 className="text-2xl font-medium" style={{ color: C.text }}>Pipeline</h2>
           <p className="mt-1 font-mono text-sm" style={{ color: C.muted }}>
-            {roles.length} open role{roles.length === 1 ? '' : 's'} — live candidate stage funnel from Ashby
+            {closed
+              ? `${roles.length} closed role${roles.length === 1 ? '' : 's'} — post-hoc source & rejection analysis`
+              : `${roles.length} open role${roles.length === 1 ? '' : 's'} — live candidate stage funnel from Ashby`}
           </p>
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          title="Refresh from Ashby"
-          className="flex items-center justify-center rounded-lg transition-all"
-          style={{ width: 34, height: 34, background: C.surface, border: `1px solid ${C.border}`, color: refreshing ? C.dim : C.muted, cursor: refreshing ? 'not-allowed' : 'pointer', flexShrink: 0 }}
-        >
+        <div className="flex items-center gap-2">
+          {/* Open / Closed toggle */}
+          <div className="flex gap-0 p-1 rounded-lg" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+            {(['open', 'closed'] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => { setView(v); setSortKey('total'); setSortDir('desc'); setSelectedRoleId(null) }}
+                className="font-mono text-xs px-3 py-1.5 rounded-md transition-all capitalize"
+                style={{
+                  background: view === v ? C.blue + '22' : 'none',
+                  color: view === v ? C.blue : C.muted,
+                  border: view === v ? `1px solid ${C.blue}44` : '1px solid transparent',
+                }}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            title="Refresh from Ashby"
+            className="flex items-center justify-center rounded-lg transition-all"
+            style={{ width: 34, height: 34, background: C.surface, border: `1px solid ${C.border}`, color: refreshing ? C.dim : C.muted, cursor: refreshing ? 'not-allowed' : 'pointer', flexShrink: 0 }}
+          >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
             style={{ transform: refreshing ? 'rotate(360deg)' : 'none', transition: refreshing ? 'transform 0.8s linear' : 'none' }}>
             <polyline points="23 4 23 10 17 10" />
             <polyline points="1 20 1 14 7 14" />
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
           </svg>
-        </button>
+          </button>
+        </div>
       </div>
 
       {/* KPI strip */}
       {totals && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[
-            { label: 'Open Roles',        value: f0(totals.openRoles),       color: C.text },
-            { label: 'Active Candidates', value: f0(totals.activeCandidates), color: C.blue },
-            { label: 'Relevant',          value: f0(totals.relevant),        color: C.greenL },
-            { label: 'Stalled Roles',     value: f0(totals.stalled),         color: totals.stalled > 0 ? C.amber : C.muted },
-          ].map((kpi) => (
+          {(closed
+            ? [
+                { label: 'Closed Roles',    value: f0(totals.closedRoles ?? 0),    color: C.text },
+                { label: 'Total Applicants', value: f0(totals.totalApplicants ?? 0), color: C.blue },
+                { label: 'Hired',           value: f0(totals.hired ?? 0),          color: C.greenL },
+                { label: 'Archived',        value: f0(totals.archived ?? 0),       color: C.muted },
+              ]
+            : [
+                { label: 'Open Roles',        value: f0(totals.openRoles ?? 0),       color: C.text },
+                { label: 'Active Candidates', value: f0(totals.activeCandidates ?? 0), color: C.blue },
+                { label: 'Relevant',          value: f0(totals.relevant ?? 0),        color: C.greenL },
+                { label: 'Stalled Roles',     value: f0(totals.stalled ?? 0),         color: (totals.stalled ?? 0) > 0 ? C.amber : C.muted },
+              ]
+          ).map((kpi) => (
             <div key={kpi.label} className="rounded-lg p-5 flex flex-col gap-3" style={CARD}>
               <span className={UPLABEL} style={{ color: C.muted }}>{kpi.label}</span>
               <span className="text-3xl font-medium leading-none" style={{ color: kpi.color }}>{kpi.value}</span>
@@ -548,7 +605,7 @@ export function PipelineDashboard() {
       {/* Role cards */}
       {roles.length === 0 ? (
         <div className="flex items-center justify-center h-40 font-mono text-sm rounded-lg" style={{ ...CARD, color: C.muted }}>
-          No open roles found in Ashby.
+          {closed ? 'No closed roles found in Ashby.' : 'No open roles found in Ashby.'}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -573,56 +630,98 @@ export function PipelineDashboard() {
                     ))}
                   </div>
                 </div>
-                {role.stalled && (
+                {closed ? (
+                  <span className="font-mono text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap" style={{ background: 'rgba(255,255,255,0.05)', color: C.muted, border: `1px solid ${C.border}` }}>
+                    {role.status ?? 'Closed'}
+                  </span>
+                ) : role.stalled && (
                   <span className="font-mono text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap" style={{ background: C.amber + '22', color: C.amber, border: `1px solid ${C.amber}44` }}>
                     idle {role.idleDays}d
                   </span>
                 )}
               </div>
 
-              {/* Counts */}
-              <div className="flex items-center gap-6">
-                <div>
-                  <span className="text-2xl font-medium leading-none" style={{ color: C.blue }}>{role.total}</span>
-                  <span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>active</span>
-                </div>
-                <div>
-                  <span className="text-2xl font-medium leading-none" style={{ color: C.greenL }}>{role.relevant}</span>
-                  <span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>relevant</span>
-                </div>
-                <span className="ml-auto font-mono text-[11px] whitespace-nowrap" style={{ color: C.blue }}>
-                  View candidates →
-                </span>
-              </div>
+              {closed ? (
+                <>
+                  {/* Outcome counts */}
+                  <div className="flex items-center gap-6">
+                    <div>
+                      <span className="text-2xl font-medium leading-none" style={{ color: C.blue }}>{role.total}</span>
+                      <span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>applicants</span>
+                    </div>
+                    <div>
+                      <span className="text-2xl font-medium leading-none" style={{ color: C.greenL }}>{role.hired ?? 0}</span>
+                      <span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>hired</span>
+                    </div>
+                    <div>
+                      <span className="text-2xl font-medium leading-none" style={{ color: C.muted }}>{role.archived ?? 0}</span>
+                      <span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>archived</span>
+                    </div>
+                    <span className="ml-auto font-mono text-[11px] whitespace-nowrap" style={{ color: C.blue }}>
+                      View analysis →
+                    </span>
+                  </div>
 
-              {/* Funnel */}
-              <FunnelBar stages={role.stages} order={stageOrder} colorMap={colorMap} />
+                  {/* Insights */}
+                  <div className="flex flex-col gap-1 font-mono text-[11px]" style={{ color: C.dim }}>
+                    {role.topSource && <span>Top source <span style={{ color: C.text }}>{role.topSource}</span></span>}
+                    {role.topArchiveReason && <span>Top rejection <span style={{ color: C.text }}>{role.topArchiveReason}</span></span>}
+                    <span>Advanced past screen <span style={{ color: C.greenL }}>{role.relevant}</span></span>
+                  </div>
 
-              {/* Stage counts inline */}
-              <div className="flex items-center gap-x-3 gap-y-1 flex-wrap font-mono text-[11px]" style={{ color: C.muted }}>
-                {stageOrder.filter((s) => (role.stages[s] ?? 0) > 0).map((s) => (
-                  <span key={s} className="flex items-center gap-1">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: colorMap[s] }} />
-                    {s} <span style={{ color: C.text }}>{role.stages[s]}</span>
-                  </span>
-                ))}
-                {role.total === 0 && <span style={{ color: C.dim }}>No active candidates</span>}
-              </div>
+                  {/* Footer meta */}
+                  <div className="flex items-center justify-between font-mono text-[10px] pt-1" style={{ color: C.dim, borderTop: `1px solid ${C.border}` }}>
+                    <span>{role.recruiter ? `Recruiter · ${role.recruiter}` : 'Recruiter · —'}</span>
+                    <span>{role.openings ? `${role.openings} opening${role.openings === 1 ? '' : 's'}` : ''}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Counts */}
+                  <div className="flex items-center gap-6">
+                    <div>
+                      <span className="text-2xl font-medium leading-none" style={{ color: C.blue }}>{role.total}</span>
+                      <span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>active</span>
+                    </div>
+                    <div>
+                      <span className="text-2xl font-medium leading-none" style={{ color: C.greenL }}>{role.relevant}</span>
+                      <span className="ml-1.5 font-mono text-[11px]" style={{ color: C.dim }}>relevant</span>
+                    </div>
+                    <span className="ml-auto font-mono text-[11px] whitespace-nowrap" style={{ color: C.blue }}>
+                      View candidates →
+                    </span>
+                  </div>
 
-              {/* Cheap-win stats */}
-              <div className="flex items-center gap-x-4 gap-y-1 flex-wrap font-mono text-[11px]" style={{ color: C.dim }}>
-                <span>New this week <span style={{ color: role.newThisWeek > 0 ? C.greenL : C.muted }}>{role.newThisWeek}</span></span>
-                {role.topSource && <span>Top source <span style={{ color: C.text }}>{role.topSource}</span></span>}
-                {role.idleDays !== null && (
-                  <span>Last activity <span style={{ color: role.idleDays > 14 ? C.amber : C.muted }}>{role.idleDays}d ago</span></span>
-                )}
-              </div>
+                  {/* Funnel */}
+                  <FunnelBar stages={role.stages} order={stageOrder} colorMap={colorMap} />
 
-              {/* Footer meta */}
-              <div className="flex items-center justify-between font-mono text-[10px] pt-1" style={{ color: C.dim, borderTop: `1px solid ${C.border}` }}>
-                <span>{role.recruiter ? `Recruiter · ${role.recruiter}` : 'Recruiter · —'}</span>
-                <span>{role.daysOpen !== null ? `Open ${role.daysOpen}d` : ''}{role.openings ? ` · ${role.openings} opening${role.openings === 1 ? '' : 's'}` : ''}</span>
-              </div>
+                  {/* Stage counts inline */}
+                  <div className="flex items-center gap-x-3 gap-y-1 flex-wrap font-mono text-[11px]" style={{ color: C.muted }}>
+                    {stageOrder.filter((s) => (role.stages[s] ?? 0) > 0).map((s) => (
+                      <span key={s} className="flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: colorMap[s] }} />
+                        {s} <span style={{ color: C.text }}>{role.stages[s]}</span>
+                      </span>
+                    ))}
+                    {role.total === 0 && <span style={{ color: C.dim }}>No active candidates</span>}
+                  </div>
+
+                  {/* Cheap-win stats */}
+                  <div className="flex items-center gap-x-4 gap-y-1 flex-wrap font-mono text-[11px]" style={{ color: C.dim }}>
+                    <span>New this week <span style={{ color: role.newThisWeek > 0 ? C.greenL : C.muted }}>{role.newThisWeek}</span></span>
+                    {role.topSource && <span>Top source <span style={{ color: C.text }}>{role.topSource}</span></span>}
+                    {role.idleDays !== null && (
+                      <span>Last activity <span style={{ color: role.idleDays > 14 ? C.amber : C.muted }}>{role.idleDays}d ago</span></span>
+                    )}
+                  </div>
+
+                  {/* Footer meta */}
+                  <div className="flex items-center justify-between font-mono text-[10px] pt-1" style={{ color: C.dim, borderTop: `1px solid ${C.border}` }}>
+                    <span>{role.recruiter ? `Recruiter · ${role.recruiter}` : 'Recruiter · —'}</span>
+                    <span>{role.daysOpen !== null ? `Open ${role.daysOpen}d` : ''}{role.openings ? ` · ${role.openings} opening${role.openings === 1 ? '' : 's'}` : ''}</span>
+                  </div>
+                </>
+              )}
             </div>
           ))}
         </div>
@@ -632,28 +731,36 @@ export function PipelineDashboard() {
       {roles.length > 0 && (
         <div className="rounded-lg overflow-hidden" style={CARD}>
           <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${C.border}` }}>
-            <span className={UPLABEL} style={{ color: C.muted }}>All Open Roles</span>
+            <span className={UPLABEL} style={{ color: C.muted }}>{closed ? 'All Closed Roles' : 'All Open Roles'}</span>
             <span className="font-mono text-xs" style={{ color: C.dim }}>{roles.length} roles</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full font-mono text-xs">
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                  {([
-                    { k: 'title', label: 'Role' },
-                    { k: 'total', label: 'Active' },
-                    { k: 'relevant', label: 'Relevant' },
-                    { k: 'newThisWeek', label: 'New 7d' },
-                    { k: 'daysOpen', label: 'Days Open' },
-                    { k: 'idleDays', label: 'Idle (d)' },
-                  ] as { k: SortKey; label: string }[]).map((col) => (
+                  {((closed
+                    ? [
+                        { k: 'title', label: 'Role' },
+                        { k: 'total', label: 'Applicants' },
+                        { k: 'hired', label: 'Hired' },
+                        { k: 'archived', label: 'Archived' },
+                        { k: 'relevant', label: 'Advanced' },
+                      ]
+                    : [
+                        { k: 'title', label: 'Role' },
+                        { k: 'total', label: 'Active' },
+                        { k: 'relevant', label: 'Relevant' },
+                        { k: 'newThisWeek', label: 'New 7d' },
+                        { k: 'daysOpen', label: 'Days Open' },
+                        { k: 'idleDays', label: 'Idle (d)' },
+                      ]) as { k: SortKey; label: string }[]).map((col) => (
                     <th key={col.k} onClick={() => handleSort(col.k)}
                       className="px-5 py-3 text-left font-normal select-none cursor-pointer whitespace-nowrap"
                       style={{ color: sortKey === col.k ? C.muted : C.dim }}>
                       {col.label}<SortArrow k={col.k} />
                     </th>
                   ))}
-                  <th className="px-5 py-3 text-left font-normal" style={{ color: C.dim }}>Recruiter</th>
+                  <th className="px-5 py-3 text-left font-normal" style={{ color: C.dim }}>{closed ? 'Top source' : 'Recruiter'}</th>
                 </tr>
               </thead>
               <tbody>
@@ -668,14 +775,26 @@ export function PipelineDashboard() {
                   >
                     <td className="px-5 py-3" style={{ color: C.text }}>
                       {role.title}
-                      {role.stalled && <span className="ml-2 font-mono text-[10px] px-1 py-0.5 rounded" style={{ background: C.amber + '22', color: C.amber }}>stalled</span>}
+                      {!closed && role.stalled && <span className="ml-2 font-mono text-[10px] px-1 py-0.5 rounded" style={{ background: C.amber + '22', color: C.amber }}>stalled</span>}
                     </td>
-                    <td className="px-5 py-3" style={{ color: C.blue }}>{role.total}</td>
-                    <td className="px-5 py-3" style={{ color: C.greenL }}>{role.relevant}</td>
-                    <td className="px-5 py-3" style={{ color: role.newThisWeek > 0 ? C.greenL : C.muted }}>{role.newThisWeek}</td>
-                    <td className="px-5 py-3" style={{ color: C.muted }}>{role.daysOpen ?? '—'}</td>
-                    <td className="px-5 py-3" style={{ color: role.stalled ? C.amber : C.muted }}>{role.idleDays ?? '—'}</td>
-                    <td className="px-5 py-3" style={{ color: C.muted }}>{role.recruiter ?? '—'}</td>
+                    {closed ? (
+                      <>
+                        <td className="px-5 py-3" style={{ color: C.blue }}>{role.total}</td>
+                        <td className="px-5 py-3" style={{ color: C.greenL }}>{role.hired ?? 0}</td>
+                        <td className="px-5 py-3" style={{ color: C.muted }}>{role.archived ?? 0}</td>
+                        <td className="px-5 py-3" style={{ color: C.greenL }}>{role.relevant}</td>
+                        <td className="px-5 py-3" style={{ color: C.muted }}>{role.topSource ?? '—'}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-5 py-3" style={{ color: C.blue }}>{role.total}</td>
+                        <td className="px-5 py-3" style={{ color: C.greenL }}>{role.relevant}</td>
+                        <td className="px-5 py-3" style={{ color: role.newThisWeek > 0 ? C.greenL : C.muted }}>{role.newThisWeek}</td>
+                        <td className="px-5 py-3" style={{ color: C.muted }}>{role.daysOpen ?? '—'}</td>
+                        <td className="px-5 py-3" style={{ color: role.stalled ? C.amber : C.muted }}>{role.idleDays ?? '—'}</td>
+                        <td className="px-5 py-3" style={{ color: C.muted }}>{role.recruiter ?? '—'}</td>
+                      </>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -699,6 +818,7 @@ export function PipelineDashboard() {
             roleId={selectedRoleId}
             fallback={selected}
             colorMap={colorMap}
+            closed={closed}
             onClose={() => setSelectedRoleId(null)}
           />
         )
