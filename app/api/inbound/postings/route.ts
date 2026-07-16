@@ -26,9 +26,14 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
+  const row = cleanPosting(body)
+  // Posting date is required — dateless rows are filtered out of the list & charts.
+  if (!row.date_posted) {
+    return NextResponse.json({ error: 'date_posted is required' }, { status: 400 })
+  }
   const { data, error } = await supabase
     .from('inbound_postings')
-    .insert(cleanPosting(body))
+    .insert(row)
     .select(INBOUND_COLUMNS)
     .single()
   if (error) {

@@ -962,6 +962,8 @@ function PostingForm({ initial, onClose, onSaved }: {
   const set = (k: keyof typeof f, v: string | number | boolean) => setF(prev => ({ ...prev, [k]: v }))
 
   async function save() {
+    // Posting date is required — rows without one are filtered out of the list & charts.
+    if (!f.date_posted) { setErr('Date posted is required.'); return }
     setSaving(true); setErr(null)
     try {
       const editingExisting = initial?.id != null
@@ -1002,8 +1004,8 @@ function PostingForm({ initial, onClose, onSaved }: {
             <input value={f.poster} onChange={e => set('poster', e.target.value)} className={input} style={inputStyle} /></div>
           <div><span className={label} style={{ color: 'var(--ds-muted)' }}>Role</span>
             <input value={f.role} onChange={e => set('role', e.target.value)} className={input} style={inputStyle} /></div>
-          <div><span className={label} style={{ color: 'var(--ds-muted)' }}>Date posted</span>
-            <input type="date" value={f.date_posted} onChange={e => set('date_posted', e.target.value)} className={input} style={inputStyle} /></div>
+          <div><span className={label} style={{ color: 'var(--ds-muted)' }}>Date posted <span style={{ color: '#f87171' }}>*</span></span>
+            <input type="date" required value={f.date_posted} onChange={e => set('date_posted', e.target.value)} className={input} style={{ ...inputStyle, borderColor: f.date_posted ? 'var(--ds-border)' : '#f8717166' }} /></div>
           <div><span className={label} style={{ color: 'var(--ds-muted)' }}>Duration (days)</span>
             <input type="number" value={f.duration_days} onChange={e => set('duration_days', e.target.value)} className={input} style={inputStyle} /></div>
           {num('views', 'Views')}
@@ -1022,7 +1024,7 @@ function PostingForm({ initial, onClose, onSaved }: {
         {err && <p className="px-5 font-mono text-xs" style={{ color: '#f87171' }}>{err}</p>}
         <div className="px-5 py-4 flex items-center justify-end gap-2" style={{ borderTop: '1px solid var(--ds-border)' }}>
           <button onClick={onClose} className="font-mono text-xs px-3 py-1.5 rounded-lg" style={{ background: 'var(--ds-surface)', border: '1px solid var(--ds-border)', color: 'var(--ds-muted)', cursor: 'pointer' }}>Cancel</button>
-          <button onClick={save} disabled={saving} className="font-mono text-xs px-3 py-1.5 rounded-lg" style={{ background: 'var(--ds-green)', color: '#fff', border: '1px solid var(--ds-green)', cursor: saving ? 'wait' : 'pointer' }}>{saving ? 'Saving…' : 'Save'}</button>
+          <button onClick={save} disabled={saving || !f.date_posted} className="font-mono text-xs px-3 py-1.5 rounded-lg" style={{ background: 'var(--ds-green)', color: '#fff', border: '1px solid var(--ds-green)', opacity: !f.date_posted ? 0.5 : 1, cursor: saving ? 'wait' : !f.date_posted ? 'not-allowed' : 'pointer' }}>{saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>
