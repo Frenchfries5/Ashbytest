@@ -96,6 +96,7 @@ interface SourceAgg {
 interface AnalysisResponse {
   configured: boolean
   totalApplicants?: number
+  hired?: { name: string; source: string | null }[]
   sourceBreakdown?: SourceAgg[]
   archiveReasons?: { reason: string; count: number }[]
   stageTiming?: Record<string, number | null>
@@ -285,6 +286,28 @@ function SourcesSection({ analysis }: { analysis: AnalysisResponse | undefined }
   )
 }
 
+function HiredSection({ analysis }: { analysis: AnalysisResponse | undefined }) {
+  const hired = analysis?.hired ?? []
+  if (!analysis) return null // still loading — SourcesSection shows the loading state
+  if (!hired.length) return null
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[11px] uppercase tracking-wider" style={{ color: C.text }}>Hired</span>
+        <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: '#1a9e6e22', color: '#1a9e6e' }}>{hired.length}</span>
+      </div>
+      <div className="rounded-lg p-3 flex flex-col gap-1.5" style={{ ...CARD, borderColor: '#1a9e6e44' }}>
+        {hired.map((h, i) => (
+          <div key={`${h.name}-${i}`} className="flex items-center justify-between gap-3">
+            <span className="text-sm truncate" style={{ color: C.text }}>{h.name}</span>
+            {h.source && <span className="font-mono text-[10px] shrink-0" style={{ color: C.dim }}>via {h.source}</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function RejectionsSection({ analysis }: { analysis: AnalysisResponse | undefined }) {
   const reasons = analysis?.archiveReasons ?? []
   if (!analysis) return null
@@ -397,6 +420,7 @@ function RoleDetailDrawer({ roleId, fallback, colorMap, closed, onClose }: {
         {/* Body */}
         <div className="px-6 py-5 flex flex-col gap-6">
           {/* Full-funnel analytics (stream in) */}
+          <HiredSection analysis={analysis} />
           <SourcesSection analysis={analysis} />
           <RejectionsSection analysis={analysis} />
 

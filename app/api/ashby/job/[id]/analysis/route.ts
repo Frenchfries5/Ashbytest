@@ -50,6 +50,11 @@ export async function GET(
     }
     const sourceBreakdown = Array.from(bySource.values()).sort((a, b) => b.total - a.total)
 
+    // ── Who was hired ──
+    const hired = allApps
+      .filter((a) => a.status === 'Hired')
+      .map((a) => ({ name: a.name, source: a.source }))
+
     // ── Why candidates were archived ──
     const byReason = new Map<string, number>()
     for (const a of allApps) {
@@ -72,6 +77,7 @@ export async function GET(
       {
         configured: true,
         totalApplicants: allApps.length,
+        hired,
         sourceBreakdown,
         archiveReasons,
         stageTiming,
