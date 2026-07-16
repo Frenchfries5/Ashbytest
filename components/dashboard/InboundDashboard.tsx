@@ -4,12 +4,13 @@ import { useState, useMemo } from 'react'
 import useSWR, { mutate as globalMutate } from 'swr'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  ReferenceLine, BarChart, Bar,
+  ReferenceLine, BarChart, Bar, ComposedChart,
 } from 'recharts'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 interface Row {
+  id?: number               // inbound_postings.id (present for DB-backed rows)
   poster: string
   date: string | null       // ISO yyyy-mm-dd
   title: string
@@ -21,6 +22,40 @@ interface Row {
   platform: string
   paid: boolean
   note: string
+}
+
+// A row as returned by /api/inbound/postings (DB shape).
+interface DbPosting {
+  id: number
+  poster: string | null
+  date_posted: string | null
+  title: string | null
+  views: number | null
+  applicants: number | null
+  relevant: number | null
+  duration_days: number | null
+  date_removed: string | null
+  role: string | null
+  platform: string | null
+  paid: boolean
+  note: string | null
+}
+
+function postingToRow(p: DbPosting): Row {
+  return {
+    id: p.id,
+    poster: p.poster ?? '',
+    date: p.date_posted ?? null,
+    title: p.title ?? '',
+    views: p.views,
+    applicants: p.applicants,
+    relevant: p.relevant,
+    duration: p.duration_days,
+    role: p.role ?? '',
+    platform: p.platform || 'Unspecified',
+    paid: !!p.paid,
+    note: p.note ?? '',
+  }
 }
 
 interface MonthBucket {
@@ -62,70 +97,6 @@ interface Aggregates {
   posters: PosterAgg[]
   platforms: PlatformAgg[]
   rows: Row[]
-}
-
-// ── CSV parsing ────────────────────────────────────────────────────────────────
-
-function splitCSVLine(line: string): string[] {
-  const cols: string[] = []
-  let cur = ''
-  let inQ = false
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i]
-    if (c === '"') { inQ = !inQ }
-    else if (c === ',' && !inQ) { cols.push(cur.trim()); cur = '' }
-    else cur += c
-  }
-  cols.push(cur.trim())
-  return cols
-}
-
-function parseNum(v: string): number | null {
-  const n = parseFloat(v.replace(/,/g, '').trim())
-  return isNaN(n) ? null : n
-}
-
-function toISO(v: string): string | null {
-  if (!v.trim()) return null
-  const d = new Date(v.trim())
-  if (isNaN(d.getTime())) return null
-  return d.toISOString().slice(0, 10)
-}
-
-function detectPlatform(note: string): { platform: string; paid: boolean } {
-  const n = note.toLowerCase()
-  const paid = n.includes('$') || n.includes('promot')
-  if (n.includes('jazz')) return { platform: 'Jazz', paid }
-  if (n.includes('linkedin') || n.includes('li ')) return { platform: 'LinkedIn', paid }
-  return { platform: 'LinkedIn', paid } // default
-}
-
-function parseCSV(raw: string): Row[] {
-  const lines = raw.split('\n').filter(Boolean)
-  return lines.slice(1).map((line) => {
-    const c = splitCSVLine(line)
-    if (!c[0]) return null
-    // Columns: Poster(0), Date Posted(1), Title(2), Views(3), Applicants(4),
-    //          Relevant(5), Duration(6), Date Removed(7), Role(8), Note(9)
-    const role = (c[8] ?? '').trim()
-    const note = (c[9] ?? '').trim()
-    const { platform, paid } = detectPlatform(note)
-
-    const rel = parseNum(c[5] ?? '')
-    return {
-      poster: c[0].trim(),
-      date: toISO(c[1] ?? ''),
-      title: c[2]?.trim() ?? '',
-      views: parseNum(c[3] ?? ''),
-      applicants: parseNum(c[4] ?? ''),
-      relevant: (rel !== null && !isNaN(rel)) ? rel : null,
-      duration: parseNum(c[6] ?? ''),
-      role,
-      platform,
-      paid,
-      note,
-    } as Row
-  }).filter(Boolean) as Row[]
 }
 
 // ── Date range helpers ─────────────────────────────────────────────────────────
@@ -337,7 +308,7 @@ function buildKeywordAggs(rows: Row[]): KeywordAgg[] {
       applicants: b.applicants,
       relevant: b.relevant,
       applyRate: b.views > 0 ? (b.applicants / b.views) * 100 : 0,
-      relRate:   b.applicants > 0 ? (b.relevant / b.applicants) * 100 : 0,
+      relRate:   b.applicants > 0 ? Math.round((b.relevant / b.applicants) * 1000) / 10 : 0,
       avgDuration: b.durs.length ? b.durs.reduce((a, v) => a + v, 0) / b.durs.length : 0,
       titlesUsed: Array.from(b.titles).sort(),
     }
@@ -348,25 +319,33 @@ const KW_PALETTE = ['#60a5fa', '#3adea0', '#f472b6', '#c98a1a', '#a78bfa', '#fb9
 
 // ── Fetcher ────────────────────────────────────────────────────────────────────
 
-const fetcher = (url: string) => fetch(url).then(r => r.text())
+const jsonFetcher = (url: string) => fetch(url).then(r => r.json())
+const POSTINGS_KEY = '/api/inbound/postings'
 
 // ── Sort key type ──────────────────────────────────────────────────────────────
 
-type SortKey = 'date' | 'poster' | 'title' | 'views' | 'applicants' | 'apply' | 'relevant' | 'duration' | 'platform'
+type SortKey = 'date' | 'poster' | 'title' | 'views' | 'applicants' | 'apply' | 'relevant' | 'relRate' | 'duration' | 'platform'
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function InboundDashboard() {
-  const { data: csv, isLoading, error } = useSWR<string>('/api/inbound', fetcher, { refreshInterval: 300_000 })
+  const { data, isLoading, error } = useSWR<{ postings: DbPosting[] }>(POSTINGS_KEY, jsonFetcher, { refreshInterval: 300_000 })
   const [refreshing, setRefreshing] = useState(false)
+  const [editing, setEditing] = useState<Row | 'new' | null>(null)
 
   async function handleRefresh() {
     setRefreshing(true)
-    await globalMutate('/api/inbound')
+    await globalMutate(POSTINGS_KEY)
     setRefreshing(false)
   }
 
-  const allRows = useMemo(() => (csv ? parseCSV(csv) : []), [csv])
+  async function handleDelete(id: number) {
+    if (!confirm('Delete this posting?')) return
+    await fetch(`${POSTINGS_KEY}/${id}`, { method: 'DELETE' })
+    await globalMutate(POSTINGS_KEY)
+  }
+
+  const allRows = useMemo(() => (data?.postings ?? []).map(postingToRow), [data])
 
   const allDates = useMemo(() => allRows.map(r => r.date).filter(Boolean).sort() as string[], [allRows])
   const minDate = allDates[0] ?? '2024-01-01'
@@ -423,6 +402,9 @@ export function InboundDashboard() {
       if (sortKey === 'apply') {
         av = a.views ? pct(a.applicants ?? 0, a.views) : -Infinity
         bv = b.views ? pct(b.applicants ?? 0, b.views) : -Infinity
+      } else if (sortKey === 'relRate') {
+        av = a.applicants ? pct(a.relevant ?? 0, a.applicants) : -Infinity
+        bv = b.applicants ? pct(b.relevant ?? 0, b.applicants) : -Infinity
       } else {
         av = a[sortKey as keyof Row] as string | number | null
         bv = b[sortKey as keyof Row] as string | number | null
@@ -509,9 +491,17 @@ export function InboundDashboard() {
           </div>
 
           <button
+            onClick={() => setEditing('new')}
+            className="font-mono text-xs px-3 py-1.5 rounded-lg transition-all whitespace-nowrap"
+            style={{ background: 'var(--ds-green)', color: '#fff', border: '1px solid var(--ds-green)', flexShrink: 0 }}
+          >
+            + Add posting
+          </button>
+
+          <button
             onClick={handleRefresh}
             disabled={refreshing || isLoading}
-            title="Refresh from Google Sheets"
+            title="Refresh"
             className="flex items-center justify-center rounded-lg transition-all"
             style={{
               width: 34, height: 34,
@@ -689,7 +679,7 @@ export function InboundDashboard() {
               <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
                 <span className={UPLABEL} style={{ color: 'var(--ds-muted)' }}>Applicants by keyword group</span>
                 <div className="flex gap-4 font-mono text-[11px]" style={{ color: C.muted }}>
-                  {[{ label: 'Applicants', color: C.blue }, { label: 'Relevant', color: C.greenL }].map(l => (
+                  {[{ label: 'Applicants', color: C.blue }, { label: 'Relevant', color: C.greenL }, { label: 'Relevance %', color: C.amber }].map(l => (
                     <span key={l.label} className="flex items-center gap-1.5">
                       <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: l.color, opacity: 0.85 }} />
                       {l.label}
@@ -698,13 +688,15 @@ export function InboundDashboard() {
                 </div>
               </div>
               <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={keywordAggs} margin={{ top: 4, right: 16, bottom: 4, left: 0 }} barGap={4} barCategoryGap="28%">
+                <ComposedChart data={keywordAggs} margin={{ top: 4, right: 16, bottom: 4, left: 0 }} barGap={4} barCategoryGap="28%">
                   <XAxis dataKey="label" tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={38} />
+                  <YAxis yAxisId="count" tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={38} />
+                  <YAxis yAxisId="pct" orientation="right" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fill: C.amber, fontSize: 10, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={40} />
                   <Tooltip content={<ChartTooltip />} />
-                  <Bar dataKey="applicants" name="Applicants" fill={C.blue}   radius={[3, 3, 0, 0]} opacity={0.85} />
-                  <Bar dataKey="relevant"   name="Relevant"   fill={C.greenL} radius={[3, 3, 0, 0]} opacity={0.85} />
-                </BarChart>
+                  <Bar yAxisId="count" dataKey="applicants" name="Applicants" fill={C.blue}   radius={[3, 3, 0, 0]} opacity={0.85} />
+                  <Bar yAxisId="count" dataKey="relevant"   name="Relevant"   fill={C.greenL} radius={[3, 3, 0, 0]} opacity={0.85} />
+                  <Line yAxisId="pct" dataKey="relRate" name="Relevance %" stroke="transparent" isAnimationActive={false} dot={{ r: 4, fill: C.amber, stroke: C.amber }} activeDot={{ r: 5 }} legendType="circle" />
+                </ComposedChart>
               </ResponsiveContainer>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -854,6 +846,7 @@ export function InboundDashboard() {
                       { k: 'applicants',label: 'Applicants' },
                       { k: 'apply',     label: 'Apply %' },
                       { k: 'relevant',  label: 'Relevant' },
+                      { k: 'relRate',   label: 'Rel. Rate' },
                       { k: 'duration',  label: 'Days' },
                       { k: 'platform',  label: 'Channel' },
                     ] as { k: SortKey; label: string }[]).map(col => (
@@ -866,6 +859,7 @@ export function InboundDashboard() {
                         {col.label}<SortArrow k={col.k} />
                       </th>
                     ))}
+                    <th className="font-mono text-[11px] uppercase px-3.5 py-3 whitespace-nowrap text-right" style={{ color: 'var(--ds-dim)' }}>Edit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -878,7 +872,7 @@ export function InboundDashboard() {
                     }[r.platform] ?? { background: 'rgba(139,148,158,0.12)', color: C.muted }
                     return (
                       <tr
-                        key={i}
+                        key={r.id ?? `row-${i}`}
                         style={{ borderBottom: '1px solid var(--ds-border)' }}
                         onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'rgba(255,255,255,0.025)' }}
                         onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = '' }}
@@ -899,10 +893,22 @@ export function InboundDashboard() {
                         <td className="font-mono text-xs px-3.5 py-2.5" style={{ color: r.relevant != null ? 'var(--ds-text)' : 'var(--ds-dim)' }}>
                           {r.relevant != null ? r.relevant.toLocaleString() : '—'}
                         </td>
+                        {(() => {
+                          const rel = r.applicants && r.relevant != null ? pct(r.relevant, r.applicants) : null
+                          return (
+                            <td className="font-mono text-xs px-3.5 py-2.5 font-medium" style={{ color: rel != null ? rateColor(rel) : 'var(--ds-dim)' }}>
+                              {rel != null ? f1(rel) + '%' : '—'}
+                            </td>
+                          )
+                        })()}
                         <td className="font-mono text-xs px-3.5 py-2.5" style={{ color: 'var(--ds-text)' }}>{r.duration != null ? f1(r.duration) : '—'}</td>
                         <td className="px-3.5 py-2.5">
                           <span className="font-mono text-[10px] px-1.5 py-0.5 rounded" style={platChipStyle}>{r.platform}</span>
                           {r.paid && <span className="font-mono text-[10px] px-1.5 py-0.5 rounded ml-1" style={{ background: 'rgba(163,113,247,0.16)', color: '#a371f7' }}>paid</span>}
+                        </td>
+                        <td className="px-3.5 py-2.5 whitespace-nowrap text-right">
+                          <button onClick={() => setEditing(r)} title="Edit" className="font-mono text-[11px] px-1.5" style={{ color: C.blue, cursor: 'pointer' }}>edit</button>
+                          <button onClick={() => r.id != null && handleDelete(r.id)} title="Delete" className="font-mono text-[11px] px-1.5" style={{ color: '#f87171', cursor: 'pointer' }}>del</button>
                         </td>
                       </tr>
                     )
@@ -918,6 +924,107 @@ export function InboundDashboard() {
           </div>
         </>
       )}
+
+      {editing && (
+        <PostingForm
+          initial={editing === 'new' ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={async () => { await globalMutate(POSTINGS_KEY); setEditing(null) }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Add / edit posting form (modal) ──────────────────────────────────────────────
+const PLATFORMS = ['LinkedIn', 'Jazz', 'Indeed', 'Other']
+
+function PostingForm({ initial, onClose, onSaved }: {
+  initial: Row | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [f, setF] = useState({
+    poster: initial?.poster ?? '',
+    date_posted: initial?.date ?? '',
+    title: initial?.title ?? '',
+    views: initial?.views ?? '',
+    applicants: initial?.applicants ?? '',
+    relevant: initial?.relevant ?? '',
+    duration_days: initial?.duration ?? '',
+    role: initial?.role ?? '',
+    platform: initial?.platform && initial.platform !== 'Unspecified' ? initial.platform : 'LinkedIn',
+    paid: initial?.paid ?? false,
+    note: initial?.note ?? '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const set = (k: keyof typeof f, v: string | number | boolean) => setF(prev => ({ ...prev, [k]: v }))
+
+  async function save() {
+    setSaving(true); setErr(null)
+    try {
+      const editingExisting = initial?.id != null
+      const res = await fetch(editingExisting ? `${POSTINGS_KEY}/${initial!.id}` : POSTINGS_KEY, {
+        method: editingExisting ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(f),
+      })
+      const j = await res.json()
+      if (!res.ok) { setErr(j.error ?? 'Save failed'); return }
+      onSaved()
+    } catch {
+      setErr('Save failed (network)')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const label = 'font-mono text-[11px] uppercase tracking-wider block mb-1'
+  const input = 'w-full font-mono text-sm px-2.5 py-1.5 rounded-md outline-none'
+  const inputStyle = { background: 'var(--ds-bg)', border: '1px solid var(--ds-border)', color: 'var(--ds-text)' } as const
+  const num = (k: keyof typeof f, l: string) => (
+    <div><span className={label} style={{ color: 'var(--ds-muted)' }}>{l}</span>
+      <input type="number" value={f[k] as number | string} onChange={e => set(k, e.target.value)} className={input} style={inputStyle} /></div>
+  )
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.55)' }} onClick={onClose}>
+      <div className="w-full max-w-lg rounded-lg overflow-y-auto max-h-[90vh]" style={{ background: 'var(--ds-bg)', border: '1px solid var(--ds-border)' }} onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid var(--ds-border)' }}>
+          <span className="text-base font-medium" style={{ color: 'var(--ds-text)' }}>{initial?.id != null ? 'Edit posting' : 'Add posting'}</span>
+          <button onClick={onClose} className="font-mono text-lg" style={{ color: 'var(--ds-muted)', cursor: 'pointer' }}>×</button>
+        </div>
+        <div className="px-5 py-4 grid grid-cols-2 gap-3">
+          <div className="col-span-2"><span className={label} style={{ color: 'var(--ds-muted)' }}>Title</span>
+            <input value={f.title} onChange={e => set('title', e.target.value)} className={input} style={inputStyle} /></div>
+          <div><span className={label} style={{ color: 'var(--ds-muted)' }}>Poster</span>
+            <input value={f.poster} onChange={e => set('poster', e.target.value)} className={input} style={inputStyle} /></div>
+          <div><span className={label} style={{ color: 'var(--ds-muted)' }}>Role</span>
+            <input value={f.role} onChange={e => set('role', e.target.value)} className={input} style={inputStyle} /></div>
+          <div><span className={label} style={{ color: 'var(--ds-muted)' }}>Date posted</span>
+            <input type="date" value={f.date_posted} onChange={e => set('date_posted', e.target.value)} className={input} style={inputStyle} /></div>
+          <div><span className={label} style={{ color: 'var(--ds-muted)' }}>Duration (days)</span>
+            <input type="number" value={f.duration_days} onChange={e => set('duration_days', e.target.value)} className={input} style={inputStyle} /></div>
+          {num('views', 'Views')}
+          {num('applicants', 'Applicants')}
+          {num('relevant', 'Relevant')}
+          <div><span className={label} style={{ color: 'var(--ds-muted)' }}>Channel</span>
+            <select value={f.platform} onChange={e => set('platform', e.target.value)} className={input} style={inputStyle}>
+              {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
+            </select></div>
+          <label className="flex items-center gap-2 mt-6 font-mono text-xs" style={{ color: 'var(--ds-text)' }}>
+            <input type="checkbox" checked={f.paid} onChange={e => set('paid', e.target.checked)} /> Paid / promoted
+          </label>
+          <div className="col-span-2"><span className={label} style={{ color: 'var(--ds-muted)' }}>Note</span>
+            <input value={f.note} onChange={e => set('note', e.target.value)} className={input} style={inputStyle} /></div>
+        </div>
+        {err && <p className="px-5 font-mono text-xs" style={{ color: '#f87171' }}>{err}</p>}
+        <div className="px-5 py-4 flex items-center justify-end gap-2" style={{ borderTop: '1px solid var(--ds-border)' }}>
+          <button onClick={onClose} className="font-mono text-xs px-3 py-1.5 rounded-lg" style={{ background: 'var(--ds-surface)', border: '1px solid var(--ds-border)', color: 'var(--ds-muted)', cursor: 'pointer' }}>Cancel</button>
+          <button onClick={save} disabled={saving} className="font-mono text-xs px-3 py-1.5 rounded-lg" style={{ background: 'var(--ds-green)', color: '#fff', border: '1px solid var(--ds-green)', cursor: saving ? 'wait' : 'pointer' }}>{saving ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
     </div>
   )
 }
