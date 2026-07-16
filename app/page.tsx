@@ -15,7 +15,6 @@ import { PipelineDashboard } from '@/components/dashboard/PipelineDashboard'
 import { ExecutiveSummary, fetchAshbyWeeks } from '@/components/dashboard/ExecutiveSummary'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
-const textFetcher = (url: string) => fetch(url).then((r) => r.text())
 
 type TopTab = 'exec' | 'sourcing' | 'inbound' | 'ashby' | 'pipeline'
 
@@ -32,7 +31,7 @@ export default function DashboardPage() {
     preload('/api/ashby/pipeline', fetcher)
     preload('ashby-weekly:dashboard', fetchAshbyWeekly)
     preload('ashby-weekly:summary', fetchAshbyWeeks)
-    preload('/api/inbound', textFetcher)
+    preload('/api/inbound/postings', fetcher)
   }, [])
 
   const weeks: WeekData[] =
