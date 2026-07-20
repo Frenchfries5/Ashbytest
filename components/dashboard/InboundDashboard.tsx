@@ -213,7 +213,6 @@ const C = {
 }
 
 const POSTER_PALETTE = ['#60a5fa', '#3adea0', '#f472b6', '#c98a1a', '#a78bfa', '#fb923c', '#34d399']
-const PLATFORM_COLORS: Record<string, string> = { LinkedIn: C.blue, Jazz: C.amber, Unspecified: C.muted }
 
 // ── Sparkbar SVG ───────────────────────────────────────────────────────────────
 
@@ -324,7 +323,7 @@ const POSTINGS_KEY = '/api/inbound/postings'
 
 // ── Sort key type ──────────────────────────────────────────────────────────────
 
-type SortKey = 'date' | 'poster' | 'title' | 'views' | 'applicants' | 'apply' | 'relevant' | 'relRate' | 'duration' | 'platform'
+type SortKey = 'date' | 'poster' | 'title' | 'views' | 'applicants' | 'apply' | 'relevant' | 'relRate' | 'duration' | 'role'
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
@@ -390,7 +389,7 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
 
   function handleSort(k: SortKey) {
     if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    else { setSortKey(k); setSortDir(['title', 'poster', 'platform'].includes(k) ? 'asc' : 'desc') }
+    else { setSortKey(k); setSortDir(['title', 'poster', 'role'].includes(k) ? 'asc' : 'desc') }
   }
 
   // detail table rows
@@ -645,35 +644,6 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
             </div>
           </div>
 
-          {/* Channel comparison */}
-          <div>
-            <h2 className={`${UPLABEL} mb-3`} style={{ color: 'var(--ds-muted)' }}>Channel Comparison</h2>
-            <div className="rounded-lg px-5 py-2" style={CARD}>
-              {[...agg.platforms]
-                .sort((a, b) => {
-                  const order: Record<string, number> = { LinkedIn: 0, Jazz: 1, Unspecified: 2 }
-                  return (order[a.platform] ?? 9) - (order[b.platform] ?? 9)
-                })
-                .map(p => {
-                  const maxApps = Math.max(...agg.platforms.map(x => x.applicants), 1)
-                  const apply = pct(p.applicants, p.views)
-                  const barW = (p.applicants / maxApps) * 100
-                  const col = PLATFORM_COLORS[p.platform] ?? C.muted
-                  return (
-                    <div key={p.platform} className="flex items-center gap-3.5 py-2.5" style={{ borderBottom: '1px solid var(--ds-border)' }}>
-                      <span className="font-mono text-sm w-24 shrink-0" style={{ color: 'var(--ds-text)' }}>{p.platform}</span>
-                      <div className="flex-1 h-5 rounded overflow-hidden" style={{ background: 'rgba(255,255,255,0.03)' }}>
-                        <div className="h-full rounded" style={{ width: `${barW}%`, background: col, opacity: 0.85 }} />
-                      </div>
-                      <span className="font-mono text-xs w-28 text-right shrink-0" style={{ color: 'var(--ds-muted)' }}>{p.applicants.toLocaleString()} apps</span>
-                      <span className="font-mono text-xs w-24 text-right shrink-0" style={{ color: rateColor(apply) }}>{f1(apply)}% apply</span>
-                      <span className="font-mono text-xs w-16 text-right shrink-0" style={{ color: 'var(--ds-dim)' }}>{p.posts} posts</span>
-                    </div>
-                  )
-                })}
-            </div>
-          </div>
-
           {/* By Keyword section */}
           <div>
             <h2 className={`${UPLABEL} mb-3`} style={{ color: 'var(--ds-muted)' }}>By Job Title Keyword</h2>
@@ -850,7 +820,7 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
                       { k: 'relevant',  label: 'Relevant' },
                       { k: 'relRate',   label: 'Rel. Rate' },
                       { k: 'duration',  label: 'Days' },
-                      { k: 'platform',  label: 'Channel' },
+                      { k: 'role',      label: 'Role' },
                     ] as { k: SortKey; label: string }[]).map(col => (
                       <th
                         key={col.k}
@@ -867,11 +837,6 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
                 <tbody>
                   {detailRows.map((r, i) => {
                     const apply = r.views ? pct(r.applicants ?? 0, r.views) : null
-                    const platChipStyle = {
-                      LinkedIn:     { background: 'rgba(55,138,221,0.15)',  color: C.blue },
-                      Jazz:         { background: 'rgba(201,138,26,0.15)',  color: C.amber },
-                      Unspecified:  { background: 'rgba(139,148,158,0.12)', color: C.muted },
-                    }[r.platform] ?? { background: 'rgba(139,148,158,0.12)', color: C.muted }
                     return (
                       <tr
                         key={r.id ?? `row-${i}`}
@@ -904,9 +869,9 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
                           )
                         })()}
                         <td className="font-mono text-xs px-3.5 py-2.5" style={{ color: 'var(--ds-text)' }}>{r.duration != null ? f1(r.duration) : '—'}</td>
-                        <td className="px-3.5 py-2.5">
-                          <span className="font-mono text-[10px] px-1.5 py-0.5 rounded" style={platChipStyle}>{r.platform}</span>
-                          {r.paid && <span className="font-mono text-[10px] px-1.5 py-0.5 rounded ml-1" style={{ background: 'rgba(163,113,247,0.16)', color: '#a371f7' }}>paid</span>}
+                        <td className="font-mono text-xs px-3.5 py-2.5 whitespace-nowrap" style={{ color: r.role ? 'var(--ds-text)' : 'var(--ds-dim)' }}>
+                          {r.role || '—'}
+                          {r.paid && <span className="font-mono text-[10px] px-1.5 py-0.5 rounded ml-1.5" style={{ background: 'rgba(163,113,247,0.16)', color: '#a371f7' }}>paid</span>}
                         </td>
                         {admin && (
                           <td className="px-3.5 py-2.5 whitespace-nowrap text-right">
