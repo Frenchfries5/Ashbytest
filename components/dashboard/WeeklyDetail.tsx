@@ -5,6 +5,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend,
 } from 'recharts'
 import { WeekData, acceptRate, replyRate, fmt1 } from '@/lib/types'
+import { isCurrentWeekStart } from '@/lib/week'
 
 // Outbound detail. Two sections:
 //   1. Week × Recruiter — a Table OR a Graph (one line per recruiter) of the selected metric.
@@ -33,7 +34,18 @@ function rateColor(pct: number): string {
   return '#f87171'
 }
 
-interface Period { label: string; sortKey: string; byName: Map<string, Counts> }
+interface Period { label: string; sortKey: string; byName: Map<string, Counts>; isLive?: boolean }
+
+function LiveTag() {
+  return (
+    <span
+      className="ml-1.5 font-mono text-[9px] px-1 py-0.5 rounded uppercase tracking-wide align-middle"
+      style={{ backgroundColor: 'rgba(58,222,160,0.15)', color: 'var(--ds-green-light)' }}
+    >
+      live
+    </span>
+  )
+}
 
 function fromRow(r: { invites: number; accepted: number; messages: number; replies: number; campaigns: number }): Counts {
   return { invites: r.invites, accepted: r.accepted, messages: r.messages, replies: r.replies, campaigns: r.campaigns }
@@ -45,7 +57,7 @@ function buildPeriods(weeks: WeekData[], names: string[], gran: Gran): Period[] 
     return weeks.map((w) => {
       const byName = new Map<string, Counts>(names.map((n) => [n, zero()]))
       for (const r of w.rows) byName.set(r.name, fromRow(r))
-      return { label: w.label, sortKey: w.weekStart ?? w.label, byName }
+      return { label: w.label, sortKey: w.weekStart ?? w.label, byName, isLive: isCurrentWeekStart(w.weekStart) }
     })
   }
   const map = new Map<string, Period>()
@@ -94,7 +106,9 @@ export function WeeklyDetail({ weeks }: { weeks: WeekData[] }) {
   })
 
   // Chart data (chronological). One numeric series per recruiter for the selected metric.
-  const chartData = weekly.map((p) => {
+  // The live (in-progress) week is excluded — its counts always start at 0 and read as a fake
+  // dip. It still appears, tagged, in the tables below since the partial number is accurate.
+  const chartData = weekly.filter((p) => !p.isLive).map((p) => {
     const row: Record<string, string | number> = { label: p.label }
     for (const n of names) row[n] = p.byName.get(n)![metric]
     return row
@@ -162,7 +176,7 @@ export function WeeklyDetail({ weeks }: { weeks: WeekData[] }) {
                   const team = teamOf(p, names)
                   return (
                     <tr key={p.label} style={{ borderBottom: i < matrixNewestFirst.length - 1 ? '1px solid var(--ds-border)' : 'none' }}>
-                      <td className="px-4 py-2.5" style={{ color: 'var(--ds-text)' }}>{p.label}</td>
+                      <td className="px-4 py-2.5 whitespace-nowrap" style={{ color: 'var(--ds-text)' }}>{p.label}{p.isLive && <LiveTag />}</td>
                       {names.map((n) => (
                         <td key={n} className="px-4 py-2.5 text-right" style={{ color: 'var(--ds-dim)' }}>{p.byName.get(n)![metric].toLocaleString()}</td>
                       ))}
@@ -231,7 +245,7 @@ function PeriodBlock({ period, names, team }: { period: Period; names: string[];
       {names.map((n, i) => (
         <tr key={n} style={{ borderTop: i === 0 ? '2px solid var(--ds-border)' : '1px solid rgba(255,255,255,0.04)' }}>
           {i === 0 ? (
-            <td className="px-4 py-2 align-top font-medium" style={{ color: 'var(--ds-text)' }} rowSpan={names.length + 1}>{period.label}</td>
+            <td className="px-4 py-2 align-top font-medium whitespace-nowrap" style={{ color: 'var(--ds-text)' }} rowSpan={names.length + 1}>{period.label}{period.isLive && <LiveTag />}</td>
           ) : null}
           <td className="px-4 py-2" style={{ color: 'var(--ds-muted)' }}>{n}</td>
           {cells(period.byName.get(n)!)}

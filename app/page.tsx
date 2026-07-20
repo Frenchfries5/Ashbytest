@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import useSWR, { preload } from 'swr'
 import { WeekData } from '@/lib/types'
+import { isCurrentWeekStart } from '@/lib/week'
 import { Topbar } from '@/components/dashboard/Topbar'
 import { KpiStrip } from '@/components/dashboard/KpiStrip'
 import { TrendsChart } from '@/components/dashboard/TrendsChart'
@@ -34,6 +35,11 @@ export default function DashboardPage() {
   }, [])
 
   const weeks: WeekData[] = data?.weeks ?? []
+  // The current week is still in progress — its counts always start at 0 and climb through the
+  // week, which reads as a fake dip in trend charts/averages. Charts get the completed weeks
+  // only; tables (Weekly Detail) still show the live week, tagged, since the number itself is
+  // accurate context, just partial.
+  const chartWeeks = useMemo(() => weeks.filter((w) => !isCurrentWeekStart(w.weekStart)), [weeks])
 
   const firstLabel = weeks[0]?.label ?? ''
   const lastLabel = weeks[weeks.length - 1]?.label ?? ''
@@ -81,10 +87,10 @@ export default function DashboardPage() {
               </p>
             </div>
 
-            <KpiStrip weeks={weeks} />
-            <TrendsChart weeks={weeks} />
-            <RateCharts weeks={weeks} />
-            <RecruiterCards weeks={weeks} />
+            <KpiStrip weeks={chartWeeks} />
+            <TrendsChart weeks={chartWeeks} />
+            <RateCharts weeks={chartWeeks} />
+            <RecruiterCards weeks={chartWeeks} />
             <WeeklyDetail weeks={weeks} />
           </>
         ) : tab === 'inbound' ? (

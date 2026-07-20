@@ -21,3 +21,12 @@ export function weekLabel(mondayMs: number): string {
       : `${MON_SHORT[sun.getUTCMonth()]} ${sun.getUTCDate()}`
   return `${a}–${b}`
 }
+
+// True if `weekStart` (a week's Monday, ISO date) is the Monday of the week containing "now" —
+// i.e. this week is still in progress. Its counts always start at 0 and climb through the week,
+// so it's excluded from trend charts/averages (a real dip, not a data problem) and tagged "live"
+// wherever it's still listed.
+export function isCurrentWeekStart(weekStart: string | undefined): boolean {
+  if (!weekStart) return false
+  return Date.parse(weekStart) === weekStartUTC(Date.now())
+}
