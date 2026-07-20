@@ -328,7 +328,7 @@ type SortKey = 'date' | 'poster' | 'title' | 'views' | 'applicants' | 'apply' | 
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export function InboundDashboard() {
+export function InboundDashboard({ admin = false }: { admin?: boolean }) {
   const { data, isLoading, error } = useSWR<{ postings: DbPosting[] }>(POSTINGS_KEY, jsonFetcher, { refreshInterval: 300_000 })
   const [refreshing, setRefreshing] = useState(false)
   const [editing, setEditing] = useState<Row | 'new' | null>(null)
@@ -490,13 +490,15 @@ export function InboundDashboard() {
           ))}
           </div>
 
-          <button
-            onClick={() => setEditing('new')}
-            className="font-mono text-xs px-3 py-1.5 rounded-lg transition-all whitespace-nowrap"
-            style={{ background: 'var(--ds-green)', color: '#fff', border: '1px solid var(--ds-green)', flexShrink: 0 }}
-          >
-            + Add posting
-          </button>
+          {admin && (
+            <button
+              onClick={() => setEditing('new')}
+              className="font-mono text-xs px-3 py-1.5 rounded-lg transition-all whitespace-nowrap"
+              style={{ background: 'var(--ds-green)', color: '#fff', border: '1px solid var(--ds-green)', flexShrink: 0 }}
+            >
+              + Add posting
+            </button>
+          )}
 
           <button
             onClick={handleRefresh}
@@ -859,7 +861,7 @@ export function InboundDashboard() {
                         {col.label}<SortArrow k={col.k} />
                       </th>
                     ))}
-                    <th className="font-mono text-[11px] uppercase px-3.5 py-3 whitespace-nowrap text-right" style={{ color: 'var(--ds-dim)' }}>Edit</th>
+                    {admin && <th className="font-mono text-[11px] uppercase px-3.5 py-3 whitespace-nowrap text-right" style={{ color: 'var(--ds-dim)' }}>Edit</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -906,10 +908,12 @@ export function InboundDashboard() {
                           <span className="font-mono text-[10px] px-1.5 py-0.5 rounded" style={platChipStyle}>{r.platform}</span>
                           {r.paid && <span className="font-mono text-[10px] px-1.5 py-0.5 rounded ml-1" style={{ background: 'rgba(163,113,247,0.16)', color: '#a371f7' }}>paid</span>}
                         </td>
-                        <td className="px-3.5 py-2.5 whitespace-nowrap text-right">
-                          <button onClick={() => setEditing(r)} title="Edit" className="font-mono text-[11px] px-1.5" style={{ color: C.blue, cursor: 'pointer' }}>edit</button>
-                          <button onClick={() => r.id != null && handleDelete(r.id)} title="Delete" className="font-mono text-[11px] px-1.5" style={{ color: '#f87171', cursor: 'pointer' }}>del</button>
-                        </td>
+                        {admin && (
+                          <td className="px-3.5 py-2.5 whitespace-nowrap text-right">
+                            <button onClick={() => setEditing(r)} title="Edit" className="font-mono text-[11px] px-1.5" style={{ color: C.blue, cursor: 'pointer' }}>edit</button>
+                            <button onClick={() => r.id != null && handleDelete(r.id)} title="Delete" className="font-mono text-[11px] px-1.5" style={{ color: '#f87171', cursor: 'pointer' }}>del</button>
+                          </td>
+                        )}
                       </tr>
                     )
                   })}

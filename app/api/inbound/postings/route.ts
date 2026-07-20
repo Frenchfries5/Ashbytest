@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { INBOUND_COLUMNS, cleanPosting } from '@/lib/inbound'
+import { isAdminRequest } from '@/lib/admin-auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,6 +21,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  if (!isAdminRequest(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   let body: Record<string, unknown>
   try {
     body = await req.json()
