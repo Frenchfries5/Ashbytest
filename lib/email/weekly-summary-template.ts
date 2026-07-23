@@ -97,7 +97,7 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
     <tr><td align="center">
       <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
         <tr><td style="padding:0 18px 4px;">
-          <div style="font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:600;color:${COL.text};">Coverdash Recruiting - Weekly Summary</div>
+          <div style="font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:600;color:${COL.text};">Coverdash Sales Recruiting - Weekly Summary</div>
           <div style="font-family:monospace;font-size:12px;color:${COL.muted};margin-top:4px;">Week ending ${esc(data.weekEnding)} · for leadership</div>
         </td></tr>
 
@@ -119,6 +119,6 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
   </table>
 </body></html>`
 
-  const subject = `Coverdash Recruiting - Week Ending ${data.weekEnding}`
+  const subject = `Coverdash Sales Recruiting - Week Ending ${data.weekEnding}`
   return { subject, html }
 }
