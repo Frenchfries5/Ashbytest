@@ -19,11 +19,13 @@ export interface WeeklySummaryData {
   hires: HiresScorecard
 }
 
-// dashboard-echoing palette (static hex — no CSS vars in email)
+// Light palette. HTML email dark themes render inconsistently — Outlook in particular applies
+// its own color inversion — so the email is intentionally light (renders cleanly in every client,
+// including dark mode), even though the dashboard itself is dark.
 const COL = {
-  bg: '#0d1117', surface: '#161b22', border: '#30363d',
-  text: '#e6edf3', muted: '#8b949e', dim: '#484f58',
-  green: '#3adea0',
+  bg: '#f0f2f5', surface: '#ffffff', border: '#e2e5ea',
+  text: '#1a1f28', muted: '#5c6672', dim: '#8a929c',
+  green: '#1a9e6e',
 }
 
 function esc(s: string): string {
@@ -82,14 +84,14 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
     ? `<tr><td align="center" style="padding:18px 18px 0;">
         <table role="presentation" cellpadding="0" cellspacing="0"><tr>
           <td style="border-radius:8px;background:${COL.green};">
-            <a href="${esc(siteUrl)}" style="display:inline-block;padding:10px 20px;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:600;color:#0d1117;text-decoration:none;">View the full dashboard →</a>
+            <a href="${esc(siteUrl)}" style="display:inline-block;padding:10px 20px;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;">View the full dashboard →</a>
           </td>
         </tr></table>
       </td></tr>`
     : ''
 
   const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"><style>:root{color-scheme:light;supported-color-schemes:light;}</style></head>
 <body style="margin:0;padding:0;background:${COL.bg};">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${COL.bg};padding:24px 0;">
     <tr><td align="center">
