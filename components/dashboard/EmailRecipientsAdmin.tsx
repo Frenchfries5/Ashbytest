@@ -29,6 +29,8 @@ export function EmailRecipientsAdmin() {
   const [adding, setAdding] = useState(false)
 
   const [sendState, setSendState] = useState<{ kind: 'idle' | 'sending' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' })
+  const [showPreview, setShowPreview] = useState(false)
+  const [previewNonce, setPreviewNonce] = useState(0) // bump to force the iframe to re-fetch
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null)
@@ -81,6 +83,11 @@ export function EmailRecipientsAdmin() {
     await load()
   }
 
+  function togglePreview() {
+    if (!showPreview) setPreviewNonce((n) => n + 1) // refresh on open
+    setShowPreview((s) => !s)
+  }
+
   async function sendNow() {
     if (!confirm('Send the weekly summary email to all active recipients now?')) return
     setSendState({ kind: 'sending' })
@@ -111,18 +118,43 @@ export function EmailRecipientsAdmin() {
           </p>
         </div>
         <div className="flex flex-col items-end gap-1">
-          <button
-            onClick={sendNow}
-            disabled={sendState.kind === 'sending'}
-            className="font-mono text-xs px-3 py-1.5 rounded-lg"
-            style={{ background: C.green, color: '#fff', border: `1px solid ${C.green}`, cursor: sendState.kind === 'sending' ? 'wait' : 'pointer' }}
-          >
-            {sendState.kind === 'sending' ? 'Sending…' : 'Send weekly email now'}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={togglePreview}
+              className="font-mono text-xs px-3 py-1.5 rounded-lg"
+              style={{ background: showPreview ? C.bg : C.surface, color: C.muted, border: `1px solid ${C.border}`, cursor: 'pointer' }}
+            >
+              {showPreview ? 'Hide preview' : 'Preview email'}
+            </button>
+            <button
+              onClick={sendNow}
+              disabled={sendState.kind === 'sending'}
+              className="font-mono text-xs px-3 py-1.5 rounded-lg"
+              style={{ background: C.green, color: '#fff', border: `1px solid ${C.green}`, cursor: sendState.kind === 'sending' ? 'wait' : 'pointer' }}
+            >
+              {sendState.kind === 'sending' ? 'Sending…' : 'Send weekly email now'}
+            </button>
+          </div>
           {sendState.kind === 'ok' && <span className="font-mono text-[11px]" style={{ color: C.greenL }}>{sendState.msg}</span>}
           {sendState.kind === 'err' && <span className="font-mono text-[11px]" style={{ color: C.red }}>{sendState.msg}</span>}
         </div>
       </div>
+
+      {/* Live preview — renders the exact HTML the weekly send produces (no email sent) */}
+      {showPreview && (
+        <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
+          <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: `1px solid ${C.border}`, background: C.surface }}>
+            <span className="font-mono text-[11px] uppercase tracking-wider" style={{ color: C.muted }}>Email preview — exactly what will send</span>
+            <button onClick={() => setPreviewNonce((n) => n + 1)} className="font-mono text-[11px]" style={{ color: C.muted, cursor: 'pointer' }}>refresh</button>
+          </div>
+          <iframe
+            key={previewNonce}
+            src={`/api/email/weekly?preview=1&t=${previewNonce}`}
+            title="Weekly email preview"
+            style={{ width: '100%', height: 640, border: 'none', background: '#0d1117' }}
+          />
+        </div>
+      )}
 
       {/* Add form */}
       <div className="rounded-lg p-4 flex items-end gap-3 flex-wrap" style={{ background: C.surface, border: `1px solid ${C.border}` }}>

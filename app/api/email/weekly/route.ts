@@ -94,15 +94,20 @@ async function sendWeeklyEmail() {
 }
 
 // GET = Vercel Cron (Friday 4pm ET) sends; `?preview=1` renders the HTML without sending.
-// Both gated by CRON_SECRET (open when unset).
+// Preview is read-only (no send) so a signed-in admin may view it too, not just cron-secret
+// holders — that's what backs the in-app "Preview" in /admin. The send path stays cron-gated.
 export async function GET(req: NextRequest) {
-  if (!authorized(req)) {
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
-  }
+  const isPreview = !!req.nextUrl.searchParams.get('preview')
   try {
-    if (req.nextUrl.searchParams.get('preview')) {
+    if (isPreview) {
+      if (!isAdminRequest(req) && !authorized(req)) {
+        return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+      }
       const { html } = await buildEmail()
       return new NextResponse(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } })
+    }
+    if (!authorized(req)) {
+      return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
     }
     return await sendWeeklyEmail()
   } catch (err) {
