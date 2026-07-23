@@ -71,6 +71,8 @@ async function buildEmail() {
     headline,
     weekEnding: weekEndingLabel(),
     siteUrl: siteUrl(),
+    feedbackPrompt: process.env.EMAIL_FEEDBACK_PROMPT !== 'off', // set to 'off' to hide the callout
+
     outbound,
     growthPipeline: pipelineOutcomes?.growthPipeline ?? null,
     screens: { value: lastC.screens, prev: prevC ? prevC.screens : null },

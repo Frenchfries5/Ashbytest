@@ -11,6 +11,7 @@ export interface WeeklySummaryData {
   headline: string
   weekEnding: string // human label, e.g. "Jul 18, 2026"
   siteUrl: string | null
+  feedbackPrompt: boolean // show the "we'd love your feedback" callout at the top
   outbound: OutboundScorecard
   growthPipeline: number | null
   // Recruiter screens + moved forward: Megan, last completed week (matches the tab's chips).
@@ -67,7 +68,7 @@ function tileGrid(tiles: TileData[]): string {
 }
 
 export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: string; html: string } {
-  const { outbound: o, hires: h, growthPipeline, screens, movedForward, siteUrl } = data
+  const { outbound: o, hires: h, growthPipeline, screens, movedForward, siteUrl, feedbackPrompt } = data
 
   // Same blocks as the Executive Summary hero strip, same order:
   // Invites, Replies, In growth pipeline / Recruiter screens, Moved forward, Hires this week.
@@ -79,6 +80,16 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
     { label: 'Moved forward', value: num(movedForward.value), sub: deltaSub(movedForward.value, movedForward.prev) },
     { label: 'Hires this week', value: num(h.thisWeek), sub: deltaSub(h.thisWeek, h.lastWeek) },
   ]
+
+  const feedback = feedbackPrompt
+    ? `<tr><td style="padding:14px 18px 0;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eafaf3;border:1px solid #b7e6d2;border-radius:10px;">
+          <tr><td style="padding:12px 16px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.5;color:${COL.text};">
+            <strong>We'd love your feedback on this new summary.</strong> Reply to this email with anything you'd want added or cut, and it comes straight to us.
+          </td></tr>
+        </table>
+      </td></tr>`
+    : ''
 
   const cta = siteUrl
     ? `<tr><td align="center" style="padding:18px 18px 0;">
@@ -101,6 +112,8 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
           <div style="font-family:monospace;font-size:12px;color:${COL.muted};margin-top:4px;">Week ending ${esc(data.weekEnding)} · for leadership</div>
         </td></tr>
 
+        ${feedback}
+
         <tr><td style="padding:14px 18px 0;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${COL.surface};border:1px solid ${COL.border};border-left:3px solid ${COL.green};border-radius:10px;">
             <tr><td style="padding:16px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:${COL.text};">${esc(data.headline)}</td></tr>
@@ -112,7 +125,6 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
         ${cta}
 
         <tr><td style="padding:22px 18px;font-family:monospace;font-size:11px;color:${COL.dim};line-height:1.5;">
-          Questions or feedback? Just reply to this email and it comes straight to us.<br><br>
           Automated weekly summary from the Coverdash recruiting dashboard. Recruiter screens and moved-forward are Megan's, last completed week; the full trend, rates, and pipeline detail live in the dashboard${siteUrl ? ` (<a href="${esc(siteUrl)}" style="color:${COL.muted};">${esc(siteUrl.replace(/^https?:\/\//, ''))}</a>)` : ''}.
         </td></tr>
       </table>
