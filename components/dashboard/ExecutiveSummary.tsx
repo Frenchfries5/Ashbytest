@@ -140,7 +140,6 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
   const { data: ashbyData } = useSWR<AshbyWeek[]>('ashby-weekly:summary', fetchAshbyWeeks, { refreshInterval: 300_000 })
   const { data: hiresData } = useSWR<WeeklyHireCount[]>('ashby-hires:summary', fetchWeeklyHires, { refreshInterval: 300_000 })
   const { data: pipelineOutcomes } = useSWR('ashby-pipeline-outcomes:summary', fetchPipelineOutcomes, { refreshInterval: 300_000 })
-  const { data: recruiterScreens } = useSWR('ashby-recruiter-screens:summary', fetchRecruiterScreens, { refreshInterval: 300_000 })
   const { data: funnel } = useSWR('ashby-interviews-funnel:summary', fetchInterviewFunnel, { refreshInterval: 300_000 })
 
   const weeks: WeekData[] = weeksRes?.weeks ?? []
@@ -152,8 +151,19 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
   const inbound = useMemo(() => computeInboundScorecard(ashby), [ashby])
   const hires = useMemo(() => computeHiresScorecard(hireWeeks), [hireWeeks])
 
-  // The five hero numbers: outbound activity → traction → inbound quality → outcome → leading
-  // indicator. Delta is week-over-week only; everything else lives on the detail tabs.
+  // Screens + moved-forward come from the interviews funnel, shown for the LAST COMPLETED week
+  // (fw[last] is the in-progress week, whose moved-forward is structurally ~0), so the pair reads
+  // as a coherent funnel. Delta is vs the prior completed week.
+  const fw = funnel?.weeks ?? []
+  const lastC = fw[fw.length - 2]
+  const prevC = fw[fw.length - 3]
+  const screensVal = lastC?.total.screens ?? 0
+  const screensPrev = prevC?.total.screens ?? null
+  const mfVal = lastC?.total.movedForward ?? 0
+  const mfPrev = prevC?.total.movedForward ?? null
+
+  // Hero strip, two rows of three: activity → pipeline, then screening → outcome.
+  // Delta is week-over-week only; everything else lives on the detail tabs.
   const hero: { label: string; value: string; delta?: ReactNode }[] = [
     {
       label: 'Invites',
@@ -165,25 +175,25 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
       value: f0(outbound.replies),
       delta: <Delta pct={outbound.repliesPrev !== null ? pctChange(outbound.replies, outbound.repliesPrev) : null} />,
     },
-    ...(inbound ? [{
-      label: 'Relevant inbound',
-      value: f0(inbound.relevant),
-      delta: <Delta pct={inbound.relevantPrev !== null ? pctChange(inbound.relevant, inbound.relevantPrev) : null} />,
+    ...(growthPipeline !== null ? [{
+      label: 'In growth pipeline',
+      value: f0(growthPipeline),
     }] : []),
-    ...(recruiterScreens ? [{
+    ...(funnel?.configured ? [{
       label: 'Recruiter screens',
-      value: f0(recruiterScreens.thisWeek),
-      delta: <Delta pct={recruiterScreens.lastWeek !== null ? pctChange(recruiterScreens.thisWeek, recruiterScreens.lastWeek) : null} />,
+      value: f0(screensVal),
+      delta: <Delta pct={screensPrev !== null ? pctChange(screensVal, screensPrev) : null} />,
+    }] : []),
+    ...(funnel?.configured ? [{
+      label: 'Moved forward',
+      value: f0(mfVal),
+      delta: <Delta pct={mfPrev !== null ? pctChange(mfVal, mfPrev) : null} />,
     }] : []),
     {
       label: 'Hires this week',
       value: f0(hires.thisWeek),
       delta: <Delta pct={hires.lastWeek !== null ? pctChange(hires.thisWeek, hires.lastWeek) : null} />,
     },
-    ...(growthPipeline !== null ? [{
-      label: 'Growth pipeline',
-      value: f0(growthPipeline),
-    }] : []),
   ]
 
   // Quality-signal trend: last 8 weeks of Megan's recruiter screens vs how many moved forward.
