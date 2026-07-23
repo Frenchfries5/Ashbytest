@@ -12,3 +12,8 @@ create table if not exists email_recipients (
 );
 
 create index if not exists email_recipients_active_idx on email_recipients (active);
+
+-- Weekly-email settings live on the shared single-row site_state table (created in meetalfred.sql).
+-- email_feedback_prompt toggles the "we'd love your feedback" callout at the top of the email,
+-- flipped from /admin. Safe to re-run.
+alter table site_state add column if not exists email_feedback_prompt boolean not null default true;

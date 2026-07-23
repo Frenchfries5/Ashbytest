@@ -47,12 +47,13 @@ const MEGAN = 'Megan Kidd'
 // Gather the same data the Executive Summary tab shows and render the email HTML. No sending,
 // no recipients, no mail send — used by both the send path and the ?preview branch.
 async function buildEmail() {
-  const [weeks, ashbyRes, hireRes, pipelineOutcomes, funnel] = await Promise.all([
+  const [weeks, ashbyRes, hireRes, pipelineOutcomes, funnel, settings] = await Promise.all([
     getWeeklySourcing(),
     getAshbyWeeklyRows(),
     getWeeklyHireCounts(),
     getPipelineOutcomes(),
     getRecruiterScreenFunnel(12),
+    supabase.from('site_state').select('email_feedback_prompt').eq('id', 1).maybeSingle(),
   ])
 
   const outbound = computeOutboundScorecard(weeks)
@@ -71,7 +72,7 @@ async function buildEmail() {
     headline,
     weekEnding: weekEndingLabel(),
     siteUrl: siteUrl(),
-    feedbackPrompt: process.env.EMAIL_FEEDBACK_PROMPT !== 'off', // set to 'off' to hide the callout
+    feedbackPrompt: settings.data?.email_feedback_prompt ?? true, // toggled from /admin
 
     outbound,
     growthPipeline: pipelineOutcomes?.growthPipeline ?? null,

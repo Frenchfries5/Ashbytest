@@ -31,6 +31,7 @@ export function EmailRecipientsAdmin() {
   const [sendState, setSendState] = useState<{ kind: 'idle' | 'sending' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' })
   const [showPreview, setShowPreview] = useState(false)
   const [previewNonce, setPreviewNonce] = useState(0) // bump to force the iframe to re-fetch
+  const [feedbackPrompt, setFeedbackPrompt] = useState<boolean | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null)
@@ -47,6 +48,29 @@ export function EmailRecipientsAdmin() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Load the "show feedback callout" setting (best-effort; defaults to on).
+  useEffect(() => {
+    fetch('/api/email/settings')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (j) setFeedbackPrompt(!!j.feedbackPrompt) })
+      .catch(() => {})
+  }, [])
+
+  async function toggleFeedback() {
+    const next = !feedbackPrompt
+    setFeedbackPrompt(next) // optimistic
+    try {
+      await fetch('/api/email/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feedbackPrompt: next }),
+      })
+      setPreviewNonce((n) => n + 1) // refresh the preview if it's open
+    } catch {
+      setFeedbackPrompt(!next) // revert on failure
+    }
+  }
 
   async function add() {
     if (!email.trim()) return
@@ -116,6 +140,10 @@ export function EmailRecipientsAdmin() {
           <p className="mt-1 font-mono text-sm" style={{ color: C.muted }}>
             Stakeholders who receive the Friday summary. Inactive recipients are skipped.
           </p>
+          <label className="mt-3 flex items-center gap-2 font-mono text-xs" style={{ color: C.muted, cursor: feedbackPrompt === null ? 'default' : 'pointer' }}>
+            <input type="checkbox" checked={!!feedbackPrompt} disabled={feedbackPrompt === null} onChange={toggleFeedback} />
+            Show the &ldquo;we&rsquo;d love your feedback&rdquo; callout at the top of the email
+          </label>
         </div>
         <div className="flex flex-col items-end gap-1">
           <div className="flex gap-2">
