@@ -112,6 +112,7 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
         ${cta}
 
         <tr><td style="padding:22px 18px;font-family:monospace;font-size:11px;color:${COL.dim};line-height:1.5;">
+          Questions or feedback? Just reply to this email and it comes straight to us.<br><br>
           Automated weekly summary from the Coverdash recruiting dashboard. Recruiter screens and moved-forward are Megan's, last completed week; the full trend, rates, and pipeline detail live in the dashboard${siteUrl ? ` (<a href="${esc(siteUrl)}" style="color:${COL.muted};">${esc(siteUrl.replace(/^https?:\/\//, ''))}</a>)` : ''}.
         </td></tr>
       </table>
