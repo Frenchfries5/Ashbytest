@@ -25,9 +25,9 @@ function rate(mf: number, s: number): number | null {
 }
 function rateColor(pct: number | null): string {
   if (pct === null) return C.dim
-  if (pct >= 60) return C.green
-  if (pct >= 35) return 'var(--ds-amber)'
-  return '#f87171'
+  if (pct >= 40) return C.green   // ≥40% green
+  if (pct >= 20) return 'var(--ds-amber)' // 20–39% amber
+  return '#f87171'                // <20% red
 }
 
 export function InterviewsDashboard() {
