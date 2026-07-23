@@ -7,7 +7,7 @@ import {
   ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
 import { Mail, ArrowUpRight, ArrowDownRight, Minus } from 'lucide-react'
-import { WeekData, aggregateWeek } from '@/lib/types'
+import { WeekData } from '@/lib/types'
 import {
   AshbyWeek, parseAshbyWeeks, pctChange, f0,
   computeOutboundScorecard, computeInboundScorecard, computeHiresScorecard, buildHeadline,
@@ -43,6 +43,17 @@ export async function fetchRecruiterScreens(): Promise<{ thisWeek: number; lastW
   const json = (await res.json()) as { configured?: boolean; thisWeek?: number; lastWeek?: number | null }
   if (!json.configured) return null
   return { thisWeek: json.thisWeek ?? 0, lastWeek: json.lastWeek ?? null }
+}
+
+interface FunnelCell { screens: number; movedForward: number }
+interface FunnelWeek { weekStart: string; label: string; total: FunnelCell; byInterviewer: Record<string, FunnelCell> }
+// Weekly recruiter-screen funnel (screens + moved forward, by interviewer) for the quality-signal chart.
+export async function fetchInterviewFunnel(): Promise<{ configured: boolean; weeks: FunnelWeek[] }> {
+  const res = await fetch('/api/ashby/interviews/funnel')
+  if (!res.ok) return { configured: false, weeks: [] }
+  const json = (await res.json()) as { configured?: boolean; weeks?: FunnelWeek[] }
+  if (!json.configured) return { configured: false, weeks: [] }
+  return { configured: true, weeks: json.weeks ?? [] }
 }
 
 // Offer-stage count + Growth-role active pipeline total, from the open-pipeline snapshot.
@@ -130,6 +141,7 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
   const { data: hiresData } = useSWR<WeeklyHireCount[]>('ashby-hires:summary', fetchWeeklyHires, { refreshInterval: 300_000 })
   const { data: pipelineOutcomes } = useSWR('ashby-pipeline-outcomes:summary', fetchPipelineOutcomes, { refreshInterval: 300_000 })
   const { data: recruiterScreens } = useSWR('ashby-recruiter-screens:summary', fetchRecruiterScreens, { refreshInterval: 300_000 })
+  const { data: funnel } = useSWR('ashby-interviews-funnel:summary', fetchInterviewFunnel, { refreshInterval: 300_000 })
 
   const weeks: WeekData[] = weeksRes?.weeks ?? []
   const ashby = ashbyData ?? []
@@ -174,25 +186,18 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
     }] : []),
   ]
 
-  // Quality-signal trend: last 8 weeks of outbound replies vs inbound relevant applicants.
+  // Quality-signal trend: last 8 weeks of Megan's recruiter screens vs how many moved forward.
+  const MEGAN = 'Megan Kidd'
   const trend = useMemo(() => {
-    const oTail = weeks.slice(-8).map((w) => ({ label: w.label, replies: aggregateWeek(w).replies }))
-    const aTail = ashby.slice(-8).map((r) => ({ label: r.label, relevant: r.relevant }))
-    const max = Math.max(oTail.length, aTail.length)
-    const out: { label: string; replies: number | null; relevant: number | null }[] = []
-    for (let i = 0; i < max; i++) {
-      const o = oTail[oTail.length - max + i]
-      const a = aTail[aTail.length - max + i]
-      out.push({
-        label: a?.label ?? o?.label ?? '',
-        replies: o ? o.replies : null,
-        relevant: a ? a.relevant : null,
-      })
-    }
-    const repliesTrend  = linReg(out.map(p => p.replies))
-    const relevantTrend = linReg(out.map(p => p.relevant))
-    return out.map((p, i) => ({ ...p, repliesTrend: repliesTrend[i], relevantTrend: relevantTrend[i] }))
-  }, [weeks, ashby])
+    const wk = (funnel?.weeks ?? []).slice(-8)
+    const out = wk.map((w) => {
+      const c = w.byInterviewer?.[MEGAN] ?? { screens: 0, movedForward: 0 }
+      return { label: w.label, screens: c.screens, moved: c.movedForward }
+    })
+    const screensTrend = linReg(out.map((p) => p.screens))
+    const movedTrend = linReg(out.map((p) => p.moved))
+    return out.map((p, i) => ({ ...p, screensTrend: screensTrend[i], movedTrend: movedTrend[i] }))
+  }, [funnel])
 
   const headline = useMemo(() => buildHeadline(outbound, inbound, hires), [outbound, inbound, hires])
 
@@ -221,7 +226,7 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
       <div className="rounded-lg p-5" style={CARD}>
         <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
           <span className={UPLABEL} style={{ color: C.muted }}>Quality signal — last 8 weeks</span>
-          <span className="font-mono text-[11px]" style={{ color: C.dim }}>outbound replies vs inbound relevant applicants</span>
+          <span className="font-mono text-[11px]" style={{ color: C.dim }}>recruiter screens (Megan) vs moved forward</span>
         </div>
         <ResponsiveContainer width="100%" height={240}>
           <ComposedChart data={trend} margin={{ top: 4, right: 12, left: 0, bottom: 0 }} barCategoryGap="30%">
@@ -236,10 +241,10 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
               formatter={(v: number, name: string) => [v?.toLocaleString() ?? '—', name]}
             />
             <Legend wrapperStyle={{ fontFamily: 'var(--font-dm-mono)', fontSize: 11, color: '#8b949e', paddingTop: 8 }} />
-            <Line type="linear" dataKey="repliesTrend"  stroke={C.greenL} strokeWidth={1.5} dot={false} opacity={0.3} connectNulls legendType="none" tooltipType="none" />
-            <Line type="linear" dataKey="relevantTrend" stroke={C.blue}   strokeWidth={1.5} dot={false} opacity={0.3} connectNulls legendType="none" tooltipType="none" />
-            <Bar dataKey="replies"  name="Outbound replies" fill={C.greenL} radius={[2,2,0,0]} opacity={0.75} />
-            <Bar dataKey="relevant" name="Inbound relevant" fill={C.blue}   radius={[2,2,0,0]} opacity={0.75} />
+            <Line type="linear" dataKey="screensTrend" stroke={C.blue}   strokeWidth={1.5} dot={false} opacity={0.3} connectNulls legendType="none" tooltipType="none" />
+            <Line type="linear" dataKey="movedTrend"   stroke={C.greenL} strokeWidth={1.5} dot={false} opacity={0.3} connectNulls legendType="none" tooltipType="none" />
+            <Bar dataKey="screens" name="Recruiter screens" fill={C.blue}   radius={[2,2,0,0]} opacity={0.75} />
+            <Bar dataKey="moved"   name="Moved forward"     fill={C.greenL} radius={[2,2,0,0]} opacity={0.75} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>

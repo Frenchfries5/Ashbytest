@@ -14,7 +14,7 @@ import { InboundDashboard } from '@/components/dashboard/InboundDashboard'
 import { AshbyDashboard, fetchAshbyWeekly } from '@/components/dashboard/AshbyDashboard'
 import { PipelineDashboard } from '@/components/dashboard/PipelineDashboard'
 import { InterviewsDashboard } from '@/components/dashboard/InterviewsDashboard'
-import { ExecutiveSummary, fetchAshbyWeeks, fetchWeeklyHires, fetchPipelineOutcomes, fetchRecruiterScreens } from '@/components/dashboard/ExecutiveSummary'
+import { ExecutiveSummary, fetchAshbyWeeks, fetchWeeklyHires, fetchPipelineOutcomes, fetchRecruiterScreens, fetchInterviewFunnel } from '@/components/dashboard/ExecutiveSummary'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -35,6 +35,7 @@ export default function DashboardPage() {
     preload('ashby-hires:summary', fetchWeeklyHires)
     preload('ashby-pipeline-outcomes:summary', fetchPipelineOutcomes)
     preload('ashby-recruiter-screens:summary', fetchRecruiterScreens)
+    preload('ashby-interviews-funnel:summary', fetchInterviewFunnel)
     preload('/api/inbound/postings', fetcher)
   }, [])
 
