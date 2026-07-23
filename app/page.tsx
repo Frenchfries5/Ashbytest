@@ -13,11 +13,12 @@ import { WeeklyDetail } from '@/components/dashboard/WeeklyDetail'
 import { InboundDashboard } from '@/components/dashboard/InboundDashboard'
 import { AshbyDashboard, fetchAshbyWeekly } from '@/components/dashboard/AshbyDashboard'
 import { PipelineDashboard } from '@/components/dashboard/PipelineDashboard'
-import { ExecutiveSummary, fetchAshbyWeeks } from '@/components/dashboard/ExecutiveSummary'
+import { InterviewsDashboard } from '@/components/dashboard/InterviewsDashboard'
+import { ExecutiveSummary, fetchAshbyWeeks, fetchWeeklyHires, fetchPipelineOutcomes, fetchRecruiterScreens } from '@/components/dashboard/ExecutiveSummary'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
-type TopTab = 'exec' | 'sourcing' | 'inbound' | 'ashby' | 'pipeline'
+type TopTab = 'exec' | 'sourcing' | 'inbound' | 'ashby' | 'pipeline' | 'interviews'
 
 export default function DashboardPage() {
   const [tab, setTab] = useState<TopTab>('exec')
@@ -31,6 +32,9 @@ export default function DashboardPage() {
     preload('/api/ashby/pipeline', fetcher)
     preload('ashby-weekly:dashboard', fetchAshbyWeekly)
     preload('ashby-weekly:summary', fetchAshbyWeeks)
+    preload('ashby-hires:summary', fetchWeeklyHires)
+    preload('ashby-pipeline-outcomes:summary', fetchPipelineOutcomes)
+    preload('ashby-recruiter-screens:summary', fetchRecruiterScreens)
     preload('/api/inbound/postings', fetcher)
   }, [])
 
@@ -54,7 +58,7 @@ export default function DashboardPage() {
         className="sticky top-0 z-10 flex gap-1 px-6 pt-4 pb-0"
         style={{ backgroundColor: 'var(--ds-bg)', borderBottom: '1px solid var(--ds-border)' }}
       >
-        {(['exec', 'sourcing', 'inbound', 'ashby', 'pipeline'] as TopTab[]).map((t) => (
+        {(['exec', 'sourcing', 'inbound', 'ashby', 'pipeline', 'interviews'] as TopTab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -67,7 +71,7 @@ export default function DashboardPage() {
               marginBottom: -1,
             }}
           >
-            {t === 'exec' ? 'Executive Summary' : t === 'sourcing' ? 'Outbound Sourcing' : t === 'inbound' ? 'Inbound Postings' : t === 'ashby' ? 'Ashby Inbound' : 'Pipeline'}
+            {t === 'exec' ? 'Executive Summary' : t === 'sourcing' ? 'Outbound Sourcing' : t === 'inbound' ? 'Inbound Postings' : t === 'ashby' ? 'Ashby Inbound' : t === 'pipeline' ? 'Pipeline' : 'Interviews'}
           </button>
         ))}
       </div>
@@ -97,8 +101,10 @@ export default function DashboardPage() {
           <InboundDashboard />
         ) : tab === 'ashby' ? (
           <AshbyDashboard />
-        ) : (
+        ) : tab === 'pipeline' ? (
           <PipelineDashboard />
+        ) : (
+          <InterviewsDashboard />
         )}
       </main>
     </div>

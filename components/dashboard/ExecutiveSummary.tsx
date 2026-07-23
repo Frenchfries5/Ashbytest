@@ -1,18 +1,67 @@
 'use client'
 
-import { useState, useMemo, type ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import useSWR from 'swr'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
 import { Mail, ArrowUpRight, ArrowDownRight, Minus } from 'lucide-react'
+import { WeekData, aggregateWeek } from '@/lib/types'
 import {
-  WeekData, aggregateWeek, acceptRate, replyRate, fmt1,
-} from '@/lib/types'
+  AshbyWeek, parseAshbyWeeks, pctChange, f0,
+  computeOutboundScorecard, computeInboundScorecard, computeHiresScorecard, buildHeadline,
+} from '@/lib/executive-summary'
+import type { WeeklyRow } from '@/lib/ashby-weekly'
+import type { WeeklyHireCount } from '@/lib/ashby-hires'
 
 // ── fetchers ─────────────────────────────────────────────────────────────────
 const jsonFetcher = (url: string) => fetch(url).then((r) => r.json())
+
+// Live Ashby weekly data. Returns [] if Ashby isn't configured.
+export async function fetchAshbyWeeks(): Promise<AshbyWeek[]> {
+  const res = await fetch('/api/ashby/weekly')
+  if (!res.ok) return []
+  const json = (await res.json()) as { configured?: boolean; rows?: WeeklyRow[] }
+  if (!json.configured || !Array.isArray(json.rows)) return []
+  return parseAshbyWeeks(json.rows)
+}
+
+export async function fetchWeeklyHires(): Promise<WeeklyHireCount[]> {
+  const res = await fetch('/api/ashby/hires')
+  if (!res.ok) return []
+  const json = (await res.json()) as { configured?: boolean; weeks?: WeeklyHireCount[] }
+  if (!json.configured || !Array.isArray(json.weeks)) return []
+  return json.weeks
+}
+
+// Recruiter screens completed this week / last week (from the synced ashby_interviews table).
+// null when the sync hasn't run / table isn't there yet — distinct from a real zero.
+export async function fetchRecruiterScreens(): Promise<{ thisWeek: number; lastWeek: number | null } | null> {
+  const res = await fetch('/api/ashby/recruiter-screens')
+  if (!res.ok) return null
+  const json = (await res.json()) as { configured?: boolean; thisWeek?: number; lastWeek?: number | null }
+  if (!json.configured) return null
+  return { thisWeek: json.thisWeek ?? 0, lastWeek: json.lastWeek ?? null }
+}
+
+// Offer-stage count + Growth-role active pipeline total, from the open-pipeline snapshot.
+// Each is null when Ashby isn't configured; growthPipeline is also null when there's no open
+// Growth role. (Only growthPipeline is surfaced on this lean view; offerStage stays available
+// for the weekly email digest.)
+export async function fetchPipelineOutcomes(): Promise<{ offerStage: number | null; growthPipeline: number | null }> {
+  const res = await fetch('/api/ashby/pipeline')
+  if (!res.ok) return { offerStage: null, growthPipeline: null }
+  const json = (await res.json()) as {
+    configured?: boolean
+    totals?: { offerStage?: number }
+    roles?: { title: string; total: number }[]
+  }
+  if (!json.configured) return { offerStage: null, growthPipeline: null }
+  const growthRoles = (json.roles ?? []).filter((r) => /growth/i.test(r.title))
+  const growthPipeline = growthRoles.length ? growthRoles.reduce((s, r) => s + (r.total ?? 0), 0) : null
+  return { offerStage: json.totals?.offerStage ?? 0, growthPipeline }
+}
 
 // ── design constants (match existing dashboard tokens) ───────────────────────
 const C = {
@@ -23,46 +72,8 @@ const C = {
 }
 const CARD = { backgroundColor: C.surface, border: `1px solid ${C.border}` }
 const UPLABEL = 'font-mono text-[11px] uppercase tracking-wider'
-const MON_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const MONTHS: Record<string, number> = {
-  January: 0, February: 1, March: 2, April: 3, May: 4, June: 5,
-  July: 6, August: 7, September: 8, October: 9, November: 10, December: 11,
-}
 
-// ── Ashby weekly parse (self-contained) ──────────────────────────────────────
-interface AshbyWeek { weekOf: Date; label: string; applicants: number; relevant: number }
-
-function weekFromParts(fullLabel: string, applicants: number, relevant: number): AshbyWeek | null {
-  const m = fullLabel.match(/^(\w+)\s+(\d+),?\s+(\d{4})/)
-  if (!m) return null
-  const [, mon, day, year] = m
-  const weekOf = new Date(parseInt(year), MONTHS[mon] ?? 0, parseInt(day))
-  return { weekOf, label: `${MON_SHORT[MONTHS[mon] ?? 0]} ${parseInt(day)}`, applicants, relevant }
-}
-
-interface WeeklyRow { fullLabel: string; applicants: number; relevant: number }
-
-// Live Ashby weekly data. Returns [] if Ashby isn't configured.
-export async function fetchAshbyWeeks(): Promise<AshbyWeek[]> {
-  const res = await fetch('/api/ashby/weekly')
-  if (!res.ok) return []
-  const json = (await res.json()) as { configured?: boolean; rows?: WeeklyRow[] }
-  if (!json.configured || !Array.isArray(json.rows)) return []
-  return json.rows
-    .map(r => weekFromParts(r.fullLabel, r.applicants || 0, r.relevant || 0))
-    .filter((r): r is AshbyWeek => r !== null)
-    .sort((a, b) => a.weekOf.getTime() - b.weekOf.getTime())
-}
-
-// ── small helpers ────────────────────────────────────────────────────────────
-function pctChange(curr: number, prev: number): number | null {
-  if (prev === 0) return curr === 0 ? 0 : null
-  return ((curr - prev) / prev) * 100
-}
-function f0(n: number) { return n.toLocaleString() }
-function signed(n: number, digits = 0) { return `${n >= 0 ? '+' : ''}${n.toFixed(digits)}` }
-
-// ── linear regression ────────────────────────────────────────────────────────
+// ── linear regression (quality-signal trend) ─────────────────────────────────
 function linReg(vals: (number | null)[]): (number | null)[] {
   const pts = vals.map((v, i) => v !== null ? [i, v] as [number, number] : null).filter(Boolean) as [number, number][]
   if (pts.length < 2) return vals.map(() => null)
@@ -77,74 +88,93 @@ function linReg(vals: (number | null)[]): (number | null)[] {
 }
 
 function todayLabel(): string {
+  const MON_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const d = new Date()
   return `${MON_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`
 }
 
 // ── delta badge ──────────────────────────────────────────────────────────────
-function Delta({ pct, pts, suffix }: { pct?: number | null; pts?: number | null; suffix?: string }) {
-  const val = pts ?? pct
-  if (val === null || val === undefined) {
+function Delta({ pct }: { pct: number | null }) {
+  if (pct === null) {
     return <span className="font-mono text-xs" style={{ color: C.dim }}>—</span>
   }
-  const flat = Math.abs(val) < 0.05
-  const up = val > 0
+  const flat = Math.abs(pct) < 0.05
+  const up = pct > 0
   const color = flat ? C.muted : up ? C.greenL : C.red
   const Icon = flat ? Minus : up ? ArrowUpRight : ArrowDownRight
-  const text = pts !== undefined
-    ? `${signed(val, 1)} pts`
-    : `${signed(val, val % 1 === 0 ? 0 : 1)}%`
   return (
     <span className="inline-flex items-center gap-0.5 font-mono text-xs" style={{ color }}>
       <Icon size={13} strokeWidth={2.5} />
-      {text}{suffix ? ` ${suffix}` : ''}
+      {`${pct >= 0 ? '+' : ''}${pct.toFixed(pct % 1 === 0 ? 0 : 1)}%`}
     </span>
   )
 }
 
-// ── scorecard tile ───────────────────────────────────────────────────────────
-function Tile({
-  label, value, sub, delta,
-}: { label: string; value: string; sub?: string; delta?: ReactNode }) {
+// ── one hero stat cell ───────────────────────────────────────────────────────
+function Stat({ label, value, delta }: { label: string; value: string; delta?: ReactNode }) {
   return (
-    <div className="rounded-lg p-4 flex flex-col gap-1.5" style={CARD}>
+    <div className="p-4 flex flex-col gap-1.5 rounded-lg" style={CARD}>
       <span className={UPLABEL} style={{ color: C.muted }}>{label}</span>
       <div className="flex items-baseline justify-between gap-2">
         <span className="font-mono text-[26px] leading-none font-medium" style={{ color: C.text }}>{value}</span>
         {delta}
       </div>
-      {sub && <span className="font-mono text-[11px]" style={{ color: C.dim }}>{sub}</span>}
     </div>
   )
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
 export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inbound' | 'ashby') => void }) {
-  // Outbound is sourced from MeetAlfred (synced to Supabase), not the manual spreadsheet.
   const { data: weeksRes } = useSWR<{ weeks: WeekData[] }>('/api/meetalfred/sourcing', jsonFetcher)
   const { data: ashbyData } = useSWR<AshbyWeek[]>('ashby-weekly:summary', fetchAshbyWeeks, { refreshInterval: 300_000 })
+  const { data: hiresData } = useSWR<WeeklyHireCount[]>('ashby-hires:summary', fetchWeeklyHires, { refreshInterval: 300_000 })
+  const { data: pipelineOutcomes } = useSWR('ashby-pipeline-outcomes:summary', fetchPipelineOutcomes, { refreshInterval: 300_000 })
+  const { data: recruiterScreens } = useSWR('ashby-recruiter-screens:summary', fetchRecruiterScreens, { refreshInterval: 300_000 })
 
   const weeks: WeekData[] = weeksRes?.weeks ?? []
   const ashby = ashbyData ?? []
+  const hireWeeks = hiresData ?? []
+  const growthPipeline = pipelineOutcomes?.growthPipeline ?? null
 
-  // ── Outbound (latest vs prior week) ──
-  const agg = weeks.map(aggregateWeek)
-  // Default to zeros while data loads / when there are no weeks (no more SEED_WEEKS fallback).
-  const oNow = agg[agg.length - 1] ?? { invites: 0, accepted: 0, messages: 0, replies: 0 }
-  const oPrev = agg.length > 1 ? agg[agg.length - 2] : null
-  const oLabel = weeks[weeks.length - 1]?.label ?? ''
+  const outbound = useMemo(() => computeOutboundScorecard(weeks), [weeks])
+  const inbound = useMemo(() => computeInboundScorecard(ashby), [ashby])
+  const hires = useMemo(() => computeHiresScorecard(hireWeeks), [hireWeeks])
 
-  const oReplyRate = replyRate(oNow.replies, oNow.invites)
-  const oReplyRatePrev = oPrev ? replyRate(oPrev.replies, oPrev.invites) : null
-  const oAcceptRate = acceptRate(oNow.accepted, oNow.invites)
+  // The five hero numbers: outbound activity → traction → inbound quality → outcome → leading
+  // indicator. Delta is week-over-week only; everything else lives on the detail tabs.
+  const hero: { label: string; value: string; delta?: ReactNode }[] = [
+    {
+      label: 'Invites',
+      value: f0(outbound.invites),
+      delta: <Delta pct={outbound.invitesPrev !== null ? pctChange(outbound.invites, outbound.invitesPrev) : null} />,
+    },
+    {
+      label: 'Replies',
+      value: f0(outbound.replies),
+      delta: <Delta pct={outbound.repliesPrev !== null ? pctChange(outbound.replies, outbound.repliesPrev) : null} />,
+    },
+    ...(inbound ? [{
+      label: 'Relevant inbound',
+      value: f0(inbound.relevant),
+      delta: <Delta pct={inbound.relevantPrev !== null ? pctChange(inbound.relevant, inbound.relevantPrev) : null} />,
+    }] : []),
+    ...(recruiterScreens ? [{
+      label: 'Recruiter screens',
+      value: f0(recruiterScreens.thisWeek),
+      delta: <Delta pct={recruiterScreens.lastWeek !== null ? pctChange(recruiterScreens.thisWeek, recruiterScreens.lastWeek) : null} />,
+    }] : []),
+    {
+      label: 'Hires this week',
+      value: f0(hires.thisWeek),
+      delta: <Delta pct={hires.lastWeek !== null ? pctChange(hires.thisWeek, hires.lastWeek) : null} />,
+    },
+    ...(growthPipeline !== null ? [{
+      label: 'Growth pipeline',
+      value: f0(growthPipeline),
+    }] : []),
+  ]
 
-  // ── Inbound / Ashby (latest vs prior week) ──
-  const aNow = ashby[ashby.length - 1] ?? null
-  const aPrev = ashby.length > 1 ? ashby[ashby.length - 2] : null
-  const aRelRate = aNow && aNow.applicants ? (aNow.relevant / aNow.applicants) * 100 : null
-  const aRelRatePrev = aPrev && aPrev.applicants ? (aPrev.relevant / aPrev.applicants) * 100 : null
-
-  // ── combined "quality signal" trend (last 8 weeks each source) ──
+  // Quality-signal trend: last 8 weeks of outbound replies vs inbound relevant applicants.
   const trend = useMemo(() => {
     const oTail = weeks.slice(-8).map((w) => ({ label: w.label, replies: aggregateWeek(w).replies }))
     const aTail = ashby.slice(-8).map((r) => ({ label: r.label, relevant: r.relevant }))
@@ -164,30 +194,7 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
     return out.map((p, i) => ({ ...p, repliesTrend: repliesTrend[i], relevantTrend: relevantTrend[i] }))
   }, [weeks, ashby])
 
-  // ── auto-narrative ���─
-  const headline = useMemo(() => {
-    const parts: string[] = []
-    const invD = oPrev ? pctChange(oNow.invites, oPrev.invites) : null
-    const repD = oPrev ? pctChange(oNow.replies, oPrev.replies) : null
-    if (oPrev && invD !== null) {
-      parts.push(`Outbound invites ${invD >= 0 ? 'up' : 'down'} ${Math.abs(invD).toFixed(0)}% (${f0(oNow.invites)} sent)`)
-    } else {
-      parts.push(`${f0(oNow.invites)} outbound invites sent`)
-    }
-    if (oPrev && repD !== null) {
-      parts.push(`replies ${repD >= 0 ? 'up' : 'down'} ${Math.abs(repD).toFixed(0)}%`)
-    }
-    if (aNow && aPrev) {
-      const relD = pctChange(aNow.relevant, aPrev.relevant)
-      if (relD !== null) {
-        parts.push(`inbound relevant applicants ${relD >= 0 ? 'up' : 'down'} ${Math.abs(relD).toFixed(0)}% (${f0(aNow.relevant)})`)
-      }
-    } else if (aNow) {
-      parts.push(`${f0(aNow.relevant)} relevant inbound applicants`)
-    }
-    const joined = parts.join('; ')
-    return joined.charAt(0).toUpperCase() + joined.slice(1) + '.'
-  }, [oNow, oPrev, aNow, aPrev])
+  const headline = useMemo(() => buildHeadline(outbound, inbound, hires), [outbound, inbound, hires])
 
   return (
     <div className="flex flex-col gap-7">
@@ -199,53 +206,18 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
         </p>
       </div>
 
-      {/* Headline narrative */}
+      {/* Headline narrative — the summary in one sentence */}
       <div className="rounded-lg p-5 flex gap-3 items-start" style={{ ...CARD, borderLeft: `3px solid ${C.greenL}` }}>
         <Mail size={18} style={{ color: C.greenL, marginTop: 2, flexShrink: 0 }} />
         <p className="text-[15px] leading-relaxed" style={{ color: C.text }}>{headline}</p>
       </div>
 
-      {/* Scorecard */}
-      <div>
-        <div className={`${UPLABEL} mb-2.5`} style={{ color: C.dim }}>
-          Outbound sourcing · week of {oLabel}
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Tile label="Invites sent" value={f0(oNow.invites)}
-            delta={<Delta pct={oPrev ? pctChange(oNow.invites, oPrev.invites) : null} />}
-            sub={oPrev ? `${signed(oNow.invites - oPrev.invites)} vs last week` : 'first week'} />
-          <Tile label="Replies" value={f0(oNow.replies)}
-            delta={<Delta pct={oPrev ? pctChange(oNow.replies, oPrev.replies) : null} />}
-            sub={oPrev ? `${signed(oNow.replies - oPrev.replies)} vs last week` : 'first week'} />
-          <Tile label="Reply rate" value={`${fmt1(oReplyRate)}%`}
-            delta={<Delta pts={oReplyRatePrev !== null ? oReplyRate - oReplyRatePrev : null} />}
-            sub="replies / invites" />
-          <Tile label="Accept rate" value={`${fmt1(oAcceptRate)}%`} sub="connections accepted" />
-        </div>
+      {/* Hero strip — the numbers that matter, week over week */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        {hero.map((s) => <Stat key={s.label} label={s.label} value={s.value} delta={s.delta} />)}
       </div>
 
-      {aNow && (
-        <div>
-          <div className={`${UPLABEL} mb-2.5`} style={{ color: C.dim }}>
-            Inbound applicants · week of {aNow.label}
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Tile label="Applicants" value={f0(aNow.applicants)}
-              delta={<Delta pct={aPrev ? pctChange(aNow.applicants, aPrev.applicants) : null} />}
-              sub={aPrev ? `${signed(aNow.applicants - aPrev.applicants)} vs last week` : 'first week'} />
-            <Tile label="Relevant" value={f0(aNow.relevant)}
-              delta={<Delta pct={aPrev ? pctChange(aNow.relevant, aPrev.relevant) : null} />}
-              sub={aPrev ? `${signed(aNow.relevant - aPrev.relevant)} vs last week` : 'first week'} />
-            <Tile label="Relevance rate" value={aRelRate !== null ? `${fmt1(aRelRate)}%` : '—'}
-              delta={<Delta pts={aRelRate !== null && aRelRatePrev !== null ? aRelRate - aRelRatePrev : null} />}
-              sub="relevant / applicants" />
-            <Tile label="Quality pipeline" value={f0(oNow.replies + aNow.relevant)}
-              sub="replies + relevant apps" />
-          </div>
-        </div>
-      )}
-
-      {/* Quality-signal trend */}
+      {/* Quality-signal trend — the one visual: are results trending up */}
       <div className="rounded-lg p-5" style={CARD}>
         <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
           <span className={UPLABEL} style={{ color: C.muted }}>Quality signal — last 8 weeks</span>
@@ -264,10 +236,8 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
               formatter={(v: number, name: string) => [v?.toLocaleString() ?? '—', name]}
             />
             <Legend wrapperStyle={{ fontFamily: 'var(--font-dm-mono)', fontSize: 11, color: '#8b949e', paddingTop: 8 }} />
-            {/* Faded linear-regression trendlines painted first so bars render on top */}
             <Line type="linear" dataKey="repliesTrend"  stroke={C.greenL} strokeWidth={1.5} dot={false} opacity={0.3} connectNulls legendType="none" tooltipType="none" />
             <Line type="linear" dataKey="relevantTrend" stroke={C.blue}   strokeWidth={1.5} dot={false} opacity={0.3} connectNulls legendType="none" tooltipType="none" />
-            {/* Hoverable bars */}
             <Bar dataKey="replies"  name="Outbound replies" fill={C.greenL} radius={[2,2,0,0]} opacity={0.75} />
             <Bar dataKey="relevant" name="Inbound relevant" fill={C.blue}   radius={[2,2,0,0]} opacity={0.75} />
           </ComposedChart>

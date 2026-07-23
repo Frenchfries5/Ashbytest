@@ -2,6 +2,7 @@
 
 import { useState, useEffect, FormEvent } from 'react'
 import { InboundDashboard } from '@/components/dashboard/InboundDashboard'
+import { EmailRecipientsAdmin } from '@/components/dashboard/EmailRecipientsAdmin'
 
 // Password-gated admin view. The public dashboard is read-only; managing inbound postings
 // (add / edit / delete) happens here. The gate is enforced server-side on the write routes —
@@ -119,7 +120,9 @@ export default function AdminPage() {
           Sign out
         </button>
       </div>
-      <main className="max-w-6xl mx-auto px-4 py-10 flex flex-col gap-8">
+      <main className="max-w-6xl mx-auto px-4 py-10 flex flex-col gap-12">
+        <EmailRecipientsAdmin />
+        <div style={{ borderTop: '1px solid var(--ds-border)' }} />
         <InboundDashboard admin />
       </main>
     </div>

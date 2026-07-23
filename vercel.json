@@ -3,6 +3,14 @@
     {
       "path": "/api/meetalfred/sync",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/ashby/interviews/sync",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/email/weekly",
+      "schedule": "0 20 * * 5"
     }
   ]
 }

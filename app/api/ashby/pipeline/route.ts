@@ -36,6 +36,7 @@ interface Role {
   stages: RoleStages
   total: number
   relevant: number
+  offerCount: number
   oldestActiveDays: number | null
   idleDays: number | null       // longest any active candidate has gone without movement
   newThisWeek: number           // applications created in the last 7 days
@@ -93,6 +94,7 @@ async function closedPipeline() {
       topArchiveReason,
       // Fields the shared Role/drawer shape expects, N/A for closed roles:
       stages: {} as RoleStages,
+      offerCount: 0,
       oldestActiveDays: null,
       idleDays: null,
       newThisWeek: 0,
@@ -157,6 +159,7 @@ export async function GET(req: Request) {
         stages: {},
         total: 0,
         relevant: 0,
+        offerCount: 0,
         oldestActiveDays: null,
         idleDays: null,
         newThisWeek: 0,
@@ -182,6 +185,7 @@ export async function GET(req: Request) {
       role.stages[stageName] = (role.stages[stageName] ?? 0) + 1
       role.total += 1
       if (isRelevantStage(stage)) role.relevant += 1
+      if (stage?.type === 'Offer') role.offerCount += 1
 
       const age = daysSince(a.createdAt)
       if (age !== null && (role.oldestActiveDays === null || age > role.oldestActiveDays)) {
@@ -227,6 +231,7 @@ export async function GET(req: Request) {
       openRoles: roles.length,
       activeCandidates: roles.reduce((s, r) => s + r.total, 0),
       relevant: roles.reduce((s, r) => s + r.relevant, 0),
+      offerStage: roles.reduce((s, r) => s + r.offerCount, 0),
       stalled: roles.filter((r) => r.stalled).length,
     }
 

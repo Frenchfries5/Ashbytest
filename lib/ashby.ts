@@ -226,6 +226,7 @@ export interface JobApplication {
   stage: Stage | null // current stage
   archiveReason: string | null
   createdAt: string | null
+  updatedAt: string | null
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -311,6 +312,7 @@ function normalizeJobApplication(a: RawApplication): JobApplication {
     stage: normalizeStage(a.currentInterviewStage),
     archiveReason: normalizeArchiveReason(a.archiveReason),
     createdAt: str(a.createdAt),
+    updatedAt: str(a.updatedAt),
   }
 }
 
@@ -438,6 +440,41 @@ export async function listAllJobApplications(jobId: string): Promise<JobApplicat
   return pages.flat().map(normalizeJobApplication)
 }
 
+// Every Hired application, org-wide (no jobId scope) — for weekly hire counts. Ashby has no
+// hire-date field; `updatedAt` on a terminal `Hired` status is used as an approximation (it
+// reflects the application's last stage transition, which for Hired is the hire event itself —
+// the same pragmatic-approximation style already used for "relevant").
+export async function listHiredApplications(): Promise<JobApplication[]> {
+  const raw = await listApplicationsByStatus('Hired')
+  return raw.map(normalizeJobApplication)
+}
+
+// Matches the evergreen "Growth" broker role by title (e.g. "Commercial Insurance Broker, Growth").
+const GROWTH_ROLE_TITLE = /growth/i
+
+export interface PipelineOutcomes {
+  offerStage: number             // active candidates in an Offer stage (open roles)
+  growthPipeline: number | null  // active candidates in the Growth role(s); null if no open Growth role
+}
+
+// Offer-stage count + Growth-role active pipeline total, in a single active-application pull —
+// no extra Ashby endpoint. Scoped to OPEN jobs, matching the pipeline route's totals so the
+// dashboard and the email agree. Returns null entirely when Ashby isn't configured.
+export async function getPipelineOutcomes(): Promise<PipelineOutcomes | null> {
+  if (!ashbyConfigured()) return null
+  const [jobs, apps] = await Promise.all([listOpenJobs(), listActiveApplications()])
+  const openJobIds = new Set(jobs.map((j) => j.id))
+  const growthJobIds = new Set(jobs.filter((j) => GROWTH_ROLE_TITLE.test(j.title)).map((j) => j.id))
+  let offerStage = 0
+  let growthPipeline = 0
+  for (const a of apps) {
+    if (!a.jobId || !openJobIds.has(a.jobId)) continue
+    if (a.stage?.type === 'Offer') offerStage += 1
+    if (growthJobIds.has(a.jobId)) growthPipeline += 1
+  }
+  return { offerStage, growthPipeline: growthJobIds.size ? growthPipeline : null }
+}
+
 // Days the application has sat in its CURRENT stage (the history entry not yet left).
 export async function getDaysInCurrentStage(applicationId: string): Promise<number | null> {
   try {
@@ -470,6 +507,68 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
 export async function getOpenJob(jobId: string): Promise<Job | null> {
   const jobs = await listOpenJobs()
   return jobs.find((j) => j.id === jobId) ?? null
+}
+
+// ── Interview schedules / events (for the interview-events sync) ─────────────────
+export interface RawInterviewEvent {
+  id: string
+  interviewId?: string
+  startTime?: string
+  endTime?: string
+  [k: string]: unknown
+}
+export interface RawInterviewSchedule {
+  id: string
+  status?: string // Complete | Cancelled | NeedsScheduling
+  applicationId?: string
+  interviewStageId?: string
+  interviewEvents?: RawInterviewEvent[]
+  [k: string]: unknown
+}
+
+// stageId -> { title, order } across every interview plan. Interview schedules reference a
+// stage only by id, so this map identifies recruiter screens (by title) AND lets us tell whether
+// a later event advanced past the screen (by orderInInterviewPlan — within an application, which
+// is always one plan, order is directly comparable; the coarse stage-name ranking can't
+// distinguish e.g. "Recruiter Screen" from "Hiring Manager Screen").
+export interface StageInfo { title: string; order: number | null }
+export async function getStageMap(): Promise<Map<string, StageInfo>> {
+  const plans = await ashbyPaginate<{ id: string }>('interviewPlan.list', { limit: 100 })
+  const map = new Map<string, StageInfo>()
+  await mapLimit(plans, 6, async (p) => {
+    const env = await ashbyPost<RawStage[]>('interviewStage.list', { interviewPlanId: p.id })
+    for (const s of env.results ?? []) {
+      const title = str(s.title)
+      if (s.id && title) {
+        map.set(s.id, { title, order: typeof s.orderInInterviewPlan === 'number' ? s.orderInInterviewPlan : null })
+      }
+    }
+  })
+  return map
+}
+
+// applicationId -> candidateId, across all statuses. Interview schedules only carry an
+// applicationId; this lets the sync tag each event with the candidate so a person can be tracked
+// across multiple applications (e.g. a General Interest intro call → a real-job req).
+export async function getApplicationCandidateMap(): Promise<Map<string, string>> {
+  const map = new Map<string, string>()
+  const statuses = ['Active', 'Lead', 'Hired', 'Archived']
+  const pages = await Promise.all(statuses.map((s) => listApplicationsByStatus(s)))
+  for (const app of pages.flat()) {
+    if (app.id && app.candidate?.id) map.set(app.id, app.candidate.id)
+  }
+  return map
+}
+
+// interviewId -> interview title (e.g. "Hiring Manager Screen Core"). Optional enrichment.
+export async function getInterviewTitleMap(): Promise<Map<string, string>> {
+  const rows = await ashbyPaginate<{ id: string; title?: string }>('interview.list', { limit: 100 })
+  const map = new Map<string, string>()
+  for (const r of rows) {
+    const title = str(r.title)
+    if (r.id && title) map.set(r.id, title)
+  }
+  return map
 }
 
 // All applications created since `createdAfterMs` (Unix ms), any status — used to
