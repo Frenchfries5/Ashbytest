@@ -5,7 +5,7 @@ import { isAdminRequest } from '@/lib/admin-auth'
 import { getWeeklySourcing } from '@/lib/sourcing'
 import { getAshbyWeeklyRows } from '@/lib/ashby-weekly'
 import { getWeeklyHireCounts } from '@/lib/ashby-hires'
-import { getRecruiterScreensScorecard } from '@/lib/ashby-interviews'
+import { getRecruiterScreenFunnel } from '@/lib/ashby-interviews'
 import { getPipelineOutcomes } from '@/lib/ashby'
 import {
   parseAshbyWeeks, computeOutboundScorecard, computeInboundScorecard,
@@ -34,15 +34,25 @@ function weekEndingLabel(): string {
   return `${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`
 }
 
+// Absolute URL of the dashboard, for the email's "View the full dashboard" link. SITE_URL wins;
+// otherwise Vercel's production domain; else null (link omitted).
+function siteUrl(): string | null {
+  if (process.env.SITE_URL) return process.env.SITE_URL.replace(/\/$/, '')
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+  return null
+}
+
+const MEGAN = 'Megan Kidd'
+
 // Gather the same data the Executive Summary tab shows and render the email HTML. No sending,
 // no recipients, no mail send — used by both the send path and the ?preview branch.
 async function buildEmail() {
-  const [weeks, ashbyRes, hireRes, pipelineOutcomes, recruiterScreens] = await Promise.all([
+  const [weeks, ashbyRes, hireRes, pipelineOutcomes, funnel] = await Promise.all([
     getWeeklySourcing(),
     getAshbyWeeklyRows(),
     getWeeklyHireCounts(),
     getPipelineOutcomes(),
-    getRecruiterScreensScorecard(),
+    getRecruiterScreenFunnel(12),
   ])
 
   const outbound = computeOutboundScorecard(weeks)
@@ -50,14 +60,22 @@ async function buildEmail() {
   const hires = computeHiresScorecard(hireRes.weeks)
   const headline = buildHeadline(outbound, inbound, hires)
 
+  // Megan's recruiter screens + moved forward, last completed week (matches the tab's chips).
+  // funnel.weeks ends at the in-progress week, so the last completed week is the second-to-last.
+  const fw = funnel.weeks
+  const megan = (i: number) => fw[i]?.byInterviewer?.[MEGAN] ?? { screens: 0, movedForward: 0 }
+  const lastC = megan(fw.length - 2)
+  const prevC = fw.length >= 3 ? megan(fw.length - 3) : null
+
   return renderWeeklySummaryEmail({
     headline,
     weekEnding: weekEndingLabel(),
+    siteUrl: siteUrl(),
     outbound,
-    inbound,
-    recruiterScreens,
-    hires,
     growthPipeline: pipelineOutcomes?.growthPipeline ?? null,
+    screens: { value: lastC.screens, prev: prevC ? prevC.screens : null },
+    movedForward: { value: lastC.movedForward, prev: prevC ? prevC.movedForward : null },
+    hires,
   })
 }
 
