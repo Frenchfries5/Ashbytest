@@ -151,16 +151,19 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
   const inbound = useMemo(() => computeInboundScorecard(ashby), [ashby])
   const hires = useMemo(() => computeHiresScorecard(hireWeeks), [hireWeeks])
 
-  // Screens + moved-forward come from the interviews funnel, shown for the LAST COMPLETED week
-  // (fw[last] is the in-progress week, whose moved-forward is structurally ~0), so the pair reads
-  // as a coherent funnel. Delta is vs the prior completed week.
+  // Screens + moved-forward come from the interviews funnel, scoped to Megan (core recruiting;
+  // the tab keeps the recruiter toggle) and shown for the LAST COMPLETED week — fw[last] is the
+  // in-progress week, whose moved-forward is structurally ~0 — so the pair reads as a coherent
+  // funnel. Delta is vs the prior completed week.
+  const MEGAN = 'Megan Kidd'
+  const megan = (w: FunnelWeek | undefined): FunnelCell => w?.byInterviewer?.[MEGAN] ?? { screens: 0, movedForward: 0 }
   const fw = funnel?.weeks ?? []
   const lastC = fw[fw.length - 2]
   const prevC = fw[fw.length - 3]
-  const screensVal = lastC?.total.screens ?? 0
-  const screensPrev = prevC?.total.screens ?? null
-  const mfVal = lastC?.total.movedForward ?? 0
-  const mfPrev = prevC?.total.movedForward ?? null
+  const screensVal = megan(lastC).screens
+  const screensPrev = prevC ? megan(prevC).screens : null
+  const mfVal = megan(lastC).movedForward
+  const mfPrev = prevC ? megan(prevC).movedForward : null
 
   // Hero strip, two rows of three: activity → pipeline, then screening → outcome.
   // Delta is week-over-week only; everything else lives on the detail tabs.
@@ -197,7 +200,6 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
   ]
 
   // Quality-signal trend: last 8 weeks of Megan's recruiter screens vs how many moved forward.
-  const MEGAN = 'Megan Kidd'
   const trend = useMemo(() => {
     const wk = (funnel?.weeks ?? []).slice(-8)
     const out = wk.map((w) => {
