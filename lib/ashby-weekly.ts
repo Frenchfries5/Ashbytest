@@ -17,7 +17,7 @@ const DEFAULT_INBOUND_JOB_ID = '824849e5-2410-439d-8f26-e9d818019ad2'
 // The Ashby Inbound tab is about ONE evergreen posting, not every req (that would also
 // wrongly fold in outbound-sourced candidates and pull thousands of rows). Resolve the job:
 // explicit env override → committed default (the Growth job) → regex auto-detect fallback.
-async function resolveInboundJobId(): Promise<string | undefined> {
+export async function resolveInboundJobId(): Promise<string | undefined> {
   const explicit = process.env.ASHBY_INBOUND_JOB_ID
   if (explicit) return explicit
   if (DEFAULT_INBOUND_JOB_ID) return DEFAULT_INBOUND_JOB_ID

@@ -14,11 +14,15 @@ import { InboundDashboard } from '@/components/dashboard/InboundDashboard'
 import { AshbyDashboard, fetchAshbyWeekly } from '@/components/dashboard/AshbyDashboard'
 import { PipelineDashboard } from '@/components/dashboard/PipelineDashboard'
 import { InterviewsDashboard } from '@/components/dashboard/InterviewsDashboard'
+import { InboundPassThrough } from '@/components/dashboard/InboundPassThrough'
+import { SourceOutcomes } from '@/components/dashboard/SourceOutcomes'
 import { ExecutiveSummary, fetchAshbyWeeks, fetchWeeklyHires, fetchPipelineOutcomes, fetchRecruiterScreens, fetchInterviewFunnel } from '@/components/dashboard/ExecutiveSummary'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
-type TopTab = 'exec' | 'sourcing' | 'inbound' | 'ashby' | 'pipeline' | 'interviews'
+// 'ashby' folded into 'inbound': ~79 of 82 tracked LinkedIn posts advertise the Growth broker req,
+// which is the same job the Ashby inbound view is scoped to — they were two halves of one funnel.
+type TopTab = 'exec' | 'sourcing' | 'inbound' | 'pipeline' | 'interviews'
 
 // Ashby data is served from a Supabase cache, so tabs paint instantly from possibly-stale rows.
 // On load we kick off an incremental sync (~1s; server-side throttled so concurrent viewers don't
@@ -89,7 +93,7 @@ export default function DashboardPage() {
         className="sticky top-0 z-10 flex items-center gap-1 px-6 pt-4 pb-0"
         style={{ backgroundColor: 'var(--ds-bg)', borderBottom: '1px solid var(--ds-border)' }}
       >
-        {(['exec', 'sourcing', 'inbound', 'ashby', 'pipeline', 'interviews'] as TopTab[]).map((t) => (
+        {(['exec', 'sourcing', 'inbound', 'pipeline', 'interviews'] as TopTab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -102,7 +106,7 @@ export default function DashboardPage() {
               marginBottom: -1,
             }}
           >
-            {t === 'exec' ? 'Executive Summary' : t === 'sourcing' ? 'Outbound Sourcing' : t === 'inbound' ? 'Inbound Postings' : t === 'ashby' ? 'Ashby Inbound' : t === 'pipeline' ? 'Pipeline' : 'Interviews'}
+            {t === 'exec' ? 'Executive Summary' : t === 'sourcing' ? 'Outbound Sourcing' : t === 'inbound' ? 'Inbound' : t === 'pipeline' ? 'Pipeline' : 'Interviews'}
           </button>
         ))}
 
@@ -139,9 +143,15 @@ export default function DashboardPage() {
             <WeeklyDetail weeks={weeks} />
           </>
         ) : tab === 'inbound' ? (
-          <InboundDashboard />
-        ) : tab === 'ashby' ? (
-          <AshbyDashboard />
+          // One inbound story, read top to bottom: what we advertised on LinkedIn (manual
+          // tracker) → how much of it reached the ATS and what became of it (Ashby) → which
+          // channels actually convert org-wide.
+          <>
+            <InboundDashboard />
+            <InboundPassThrough />
+            <AshbyDashboard />
+            <SourceOutcomes />
+          </>
         ) : tab === 'pipeline' ? (
           <PipelineDashboard />
         ) : (

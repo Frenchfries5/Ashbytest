@@ -135,7 +135,7 @@ function Stat({ label, value, delta }: { label: string; value: string; delta?: R
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
-export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inbound' | 'ashby') => void }) {
+export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inbound') => void }) {
   const { data: weeksRes } = useSWR<{ weeks: WeekData[] }>('/api/meetalfred/sourcing', jsonFetcher)
   const { data: ashbyData } = useSWR<AshbyWeek[]>('ashby-weekly:summary', fetchAshbyWeeks, { refreshInterval: 300_000 })
   const { data: hiresData } = useSWR<WeeklyHireCount[]>('ashby-hires:summary', fetchWeeklyHires, { refreshInterval: 300_000 })
@@ -263,7 +263,7 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
 
       {onJump && (
         <div className="flex gap-2 flex-wrap pb-2">
-          {([['sourcing', 'Outbound detail'], ['inbound', 'Inbound postings'], ['ashby', 'Ashby detail']] as const).map(([k, label]) => (
+          {([['sourcing', 'Outbound detail'], ['inbound', 'Inbound detail']] as const).map(([k, label]) => (
             <button key={k} onClick={() => onJump(k)}
               className="font-mono text-xs px-3 py-1.5 rounded-md transition-colors"
               style={{ color: C.muted, backgroundColor: C.surface, border: `1px solid ${C.border}` }}>

@@ -244,7 +244,7 @@ export function AshbyDashboard() {
       {/* Header row */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="text-2xl font-medium" style={{ color: C.text }}>Ashby Inbound</h2>
+          <h2 className="text-2xl font-medium" style={{ color: C.text }}>What reached Ashby</h2>
           <p className="mt-1 font-mono text-sm" style={{ color: C.muted }}>
             Perpetual job listing — weekly applicant &amp; relevance tracking
           </p>
