@@ -6,7 +6,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, BarChart, Bar, ComposedChart,
 } from 'recharts'
-import { InboundPassThrough } from './InboundPassThrough'
+import { InboundFunnel } from './InboundFunnel'
 import { SourceOutcomes } from './SourceOutcomes'
 import { AshbyDashboard } from './AshbyDashboard'
 
@@ -388,11 +388,11 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
   const [editing, setEditing] = useState<Row | 'new' | null>(null)
   const [subTab, setSubTab] = useState<SubTab>('posts')
   // Ashby side of the same funnel (that req only), for the combined trend + spine.
-  // `linkedin` scope only, so the trend matches the LinkedIn-attributed funnel spine above it.
+  // Pooled inbound (all channels, sales/broker reqs) so the trend matches the funnel spine above it.
   const { data: ashbyFunnel } = useSWR<{
     configured: boolean
     dataStart: string | null
-    linkedin: { monthly: { month: string; applications: number; advanced: number; hired: number }[] } | null
+    monthly: { month: string; applications: number; screened: number; advanced: number; hired: number }[]
   }>('/api/ashby/inbound-funnel', jsonFetcher, { refreshInterval: 300_000 })
 
   async function handleRefresh() {
@@ -519,28 +519,24 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
 
   const keywordAggs = useMemo(() => buildKeywordAggs(filteredRows), [filteredRows])
 
-  // One trend instead of two: manual LinkedIn applicants and Ashby applications on the same axis,
-  // since the gap between them is the point. Joined on YYYY-MM and clipped to the active range.
+  // The pooled funnel over time — same definitions as the spine, so there's one story rather than
+  // one series per data source. The manual tracker's applicant count is deliberately NOT a series:
+  // those are the same people Ashby already counted, so plotting both would double-represent them.
   const combinedTrend = useMemo(() => {
-    const ashbyByMonth = new Map((ashbyFunnel?.linkedin?.monthly ?? []).map(m => [m.month, m]))
     const fromYm = activeRange.from.slice(0, 7)
     const toYm = activeRange.to.slice(0, 7)
-    const yms = new Set<string>([
-      ...agg.monthly.map(m => m.ym),
-      ...[...ashbyByMonth.keys()].filter(ym => ym >= fromYm && ym <= toYm),
-    ])
-    return [...yms].sort().map(ym => {
-      const manual = agg.monthly.find(m => m.ym === ym)
-      const a = ashbyByMonth.get(ym)
-      const [y, mo] = ym.split('-')
-      return {
-        label: manual?.label ?? `${MON_SHORT[Number(mo) - 1]} ${y.slice(2)}`,
-        liApplicants: manual?.applicants ?? 0,
-        ashbyApps: a?.applications ?? 0,
-        hired: a?.hired ?? 0,
-      }
-    })
-  }, [agg.monthly, ashbyFunnel, activeRange])
+    return (ashbyFunnel?.monthly ?? [])
+      .filter(m => m.month >= fromYm && m.month <= toYm)
+      .map(m => {
+        const [y, mo] = m.month.split('-')
+        return {
+          label: `${MON_SHORT[Number(mo) - 1]} ${y.slice(2)}`,
+          applications: m.applications,
+          screened: m.screened,
+          hired: m.hired,
+        }
+      })
+  }, [ashbyFunnel, activeRange])
 
   const ashbyStartLabel = ashbyFunnel?.dataStart
     ? new Date(ashbyFunnel.dataStart).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
@@ -666,7 +662,7 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
       {!isLoading && !isNoData && (
         <>
           {/* ── The whole inbound funnel in one row: ads → ATS → outcomes ───────────── */}
-          <InboundPassThrough />
+          <InboundFunnel />
           {/* KPI strip — quality first. Apply rate is deliberately NOT here: measured across
               these posts it has ~zero correlation with whether applicants are relevant, so it
               reads as a headline result while only describing how clickable a title was. It
@@ -698,9 +694,9 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
                  same axis on purpose: where they diverge is the interesting part. ────────── */}
           <div className="rounded-lg p-5" style={CARD}>
             <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-              <span className={UPLABEL} style={{ color: 'var(--ds-muted)' }}>Applicants Over Time</span>
+              <span className={UPLABEL} style={{ color: 'var(--ds-muted)' }}>Inbound Over Time</span>
               <div className="flex gap-4 flex-wrap font-mono text-[11px]" style={{ color: 'var(--ds-muted)' }}>
-                {[{ label: 'LinkedIn applicants', color: C.blue }, { label: 'Applications received', color: C.greenL }, { label: 'Hired', color: C.amber }].map(l => (
+                {[{ label: 'Applications', color: C.blue }, { label: 'Screened', color: C.greenL }, { label: 'Hired', color: C.amber }].map(l => (
                   <span key={l.label} className="flex items-center gap-1.5">
                     <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: l.color, opacity: 0.9 }} />
                     {l.label}
@@ -713,15 +709,15 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
                 <XAxis dataKey="label" tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={16} />
                 <YAxis tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={40} allowDecimals={false} />
                 <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="liApplicants" name="LinkedIn applicants" fill={C.blue} radius={[2, 2, 0, 0]} opacity={0.75} />
-                <Bar dataKey="ashbyApps" name="Applications received" fill={C.greenL} radius={[2, 2, 0, 0]} opacity={0.75} />
+                <Bar dataKey="applications" name="Applications" fill={C.blue} radius={[2, 2, 0, 0]} opacity={0.75} />
+                <Bar dataKey="screened" name="Screened" fill={C.greenL} radius={[2, 2, 0, 0]} opacity={0.75} />
                 <Line type="monotone" dataKey="hired" name="Hired" stroke={C.amber} strokeWidth={2} dot />
               </ComposedChart>
             </ResponsiveContainer>
             <p className="font-mono text-[10.5px] mt-2 leading-relaxed" style={{ color: C.dim }}>
-              Two different systems on one axis: LinkedIn&rsquo;s reported applicants vs LinkedIn-sourced
-              applications that landed in Ashby for that req{ashbyStartLabel ? `, which has history from ${ashbyStartLabel} onward` : ''}.
-              A month with Ashby volume but no LinkedIn bar means posts weren&rsquo;t logged — not that nothing ran.
+              Same pooled definitions as the funnel above — every inbound channel, sales/broker reqs
+              {ashbyStartLabel ? `, from ${ashbyStartLabel} when Ashby history begins` : ''}. Screened counts people
+              who sat through an interview, so a month&rsquo;s bar can keep filling in after applications land.
             </p>
           </div>
           {/* ── Drill-down behind sub-tabs, so the page stays about one screen ──────── */}
