@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { queryApplications, type CachedAppRow } from '@/lib/ashby-cache'
 
@@ -19,6 +19,20 @@ export const dynamic = 'force-dynamic'
 const SALES_REQ = /broker|account manager/i
 const TEST_REQ = /\btest\b/i
 
+// The postings tracker labels each post with a role (Growth / Core / AM). Those map onto Ashby
+// reqs by title, so the role filter at the top of the tab can scope this funnel too — otherwise
+// picking "Core" would filter the posts above while the funnel below still showed every req.
+const ROLE_REQ: Record<string, RegExp> = {
+  growth: /broker.*growth/i,
+  core: /broker.*core/i,
+  am: /account manager/i,
+}
+
+function reqMatcher(role: string | null): RegExp {
+  if (!role || role === 'all') return SALES_REQ
+  return ROLE_REQ[role.toLowerCase()] ?? SALES_REQ
+}
+
 // Screening/pre-interview stages — an event at any other stage means they got past the screen.
 const EARLY_STAGE = /new lead|reached out|replied|application review|holding tank|recruiter screen|introduction call|sourced/i
 
@@ -29,8 +43,11 @@ export interface FunnelStep {
   hired: number
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const role = req.nextUrl.searchParams.get('role')
+    const matcher = reqMatcher(role)
+
     const [{ data: jobRows, error: jobErr }, appRows] = await Promise.all([
       supabase.from('ashby_jobs').select('id, title'),
       queryApplications(),
@@ -43,7 +60,7 @@ export async function GET() {
     }
 
     const reqs = (jobRows ?? []).filter(
-      (j) => typeof j.title === 'string' && SALES_REQ.test(j.title) && !TEST_REQ.test(j.title)
+      (j) => typeof j.title === 'string' && matcher.test(j.title) && !TEST_REQ.test(j.title)
     ) as { id: string; title: string }[]
     const reqIds = new Set(reqs.map((j) => j.id))
     const inScope: CachedAppRow[] = appRows.filter((a) => a.job_id && reqIds.has(a.job_id))
@@ -103,6 +120,7 @@ export async function GET() {
     return NextResponse.json(
       {
         configured: true,
+        role: role ?? 'all',
         applications: inScope.length,
         screened: screenedIds.size,
         advanced: advancedIds.size,

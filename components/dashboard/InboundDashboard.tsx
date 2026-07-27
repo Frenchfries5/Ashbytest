@@ -388,13 +388,6 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
   const [editing, setEditing] = useState<Row | 'new' | null>(null)
   const [subTab, setSubTab] = useState<SubTab>('posts')
   // Ashby side of the same funnel (that req only), for the combined trend + spine.
-  // Pooled inbound (all channels, sales/broker reqs) so the trend matches the funnel spine above it.
-  const { data: ashbyFunnel } = useSWR<{
-    configured: boolean
-    dataStart: string | null
-    monthly: { month: string; applications: number; screened: number; advanced: number; hired: number }[]
-  }>('/api/ashby/inbound-funnel', jsonFetcher, { refreshInterval: 300_000 })
-
   async function handleRefresh() {
     setRefreshing(true)
     await globalMutate(POSTINGS_KEY)
@@ -416,6 +409,13 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
 
   const [rangeId, setRangeId] = useState('all')
   const [roleFilter, setRoleFilter] = useState('all')
+
+  // Pooled inbound (all channels, sales/broker reqs) so the trend matches the funnel spine above it.
+  const { data: ashbyFunnel } = useSWR<{
+    configured: boolean
+    dataStart: string | null
+    monthly: { month: string; applications: number; screened: number; advanced: number; hired: number }[]
+  }>(`/api/ashby/inbound-funnel?role=${encodeURIComponent(roleFilter)}`, jsonFetcher, { refreshInterval: 300_000 })
   const [detailPoster, setDetailPoster] = useState('all')
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -662,7 +662,7 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
       {!isLoading && !isNoData && (
         <>
           {/* ── The whole inbound funnel in one row: ads → ATS → outcomes ───────────── */}
-          <InboundFunnel />
+          <InboundFunnel role={roleFilter} />
           {/* KPI strip — quality first. Apply rate is deliberately NOT here: measured across
               these posts it has ~zero correlation with whether applicants are relevant, so it
               reads as a headline result while only describing how clickable a title was. It
@@ -1079,8 +1079,19 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
           </div>
           )}
 
-          {subTab === 'channels' && <SourceOutcomes />}
-          {subTab === 'ashby' && <AshbyDashboard />}
+          {subTab === 'channels' && <SourceOutcomes role={roleFilter} />}
+          {subTab === 'ashby' && (
+            <>
+              {/* This view is hard-scoped to the evergreen listing, so it can't follow the role
+                  filter — say so rather than letting the numbers look inconsistent. */}
+              {roleFilter !== 'all' && (
+                <p className="font-mono text-[11px] px-3 py-2 rounded" style={{ color: C.amber, background: 'rgba(201,138,26,0.1)', border: '1px solid rgba(201,138,26,0.25)' }}>
+                  Showing the perpetual listing only — this section isn&rsquo;t affected by the &ldquo;{roleFilter}&rdquo; role filter.
+                </p>
+              )}
+              <AshbyDashboard />
+            </>
+          )}
         </>
       )}
 

@@ -40,8 +40,8 @@ function Step({ label, value, sub, color }: { label: string; value: string; sub?
   )
 }
 
-export function InboundFunnel() {
-  const { data: f } = useSWR<Funnel>('/api/ashby/inbound-funnel', fetcher, { refreshInterval: 300_000 })
+export function InboundFunnel({ role = 'all' }: { role?: string }) {
+  const { data: f } = useSWR<Funnel>(`/api/ashby/inbound-funnel?role=${encodeURIComponent(role)}`, fetcher, { refreshInterval: 300_000 })
   const { data: postingsRes } = useSWR<{ postings: Posting[] }>('/api/inbound/postings', fetcher)
 
   // Read defensively: a cached response from an older shape must not crash the page.
