@@ -1,21 +1,22 @@
 import { NextResponse } from 'next/server'
 import {
-  ashbyConfigured,
-  listOpenJobs,
-  listClosedJobs,
-  listActiveApplications,
-  listAllJobApplications,
   isRelevantStage,
   isRelevantApplication,
   orderStageNames,
-  mapLimit,
   STALLED_DAYS,
   type Stage,
 } from '@/lib/ashby'
+import {
+  cachedOpenJobs,
+  cachedClosedJobs,
+  cachedActiveApplications,
+  queryApplications,
+  toJobApplication,
+} from '@/lib/ashby-cache'
 
 export const dynamic = 'force-dynamic'
-// The closed-roles view fans out full-funnel pulls across every closed job (thousands of
-// archived apps), so it can take ~30s. Raise the ceiling (Vercel Hobby caps at 60s).
+// Both views now read the Supabase cache (see lib/ashby-cache-sync.ts) instead of calling Ashby,
+// so they're fast; the ceiling is just headroom.
 export const maxDuration = 60
 
 interface RoleStages {
@@ -54,11 +55,31 @@ function daysSince(iso: string | null): number | null {
   return Math.max(0, Math.floor((Date.now() - t) / DAY))
 }
 
+// The cache tables aren't there yet (SQL not run) — report unconfigured rather than erroring, so
+// the tab shows an empty state and the on-load sync can fill it in.
+function cacheUnavailable(view: 'open' | 'closed') {
+  return NextResponse.json(
+    { configured: false, view, generatedAt: new Date().toISOString(), stageOrder: [], totals: null, roles: [] },
+    { headers: { 'Cache-Control': 'no-store' } }
+  )
+}
+
 // Closed/Archived roles: post-hoc outcome summary per role (total applicants, hired, archived,
 // top source, top rejection reason). Full source/rejection detail is in the drawer's analysis.
 async function closedPipeline() {
-  const jobs = await listClosedJobs()
-  const perJob = await mapLimit(jobs, 4, async (j) => ({ job: j, apps: await listAllJobApplications(j.id) }))
+  // One cache read for every application, grouped by job — replaces the per-job Ashby fan-out
+  // that made this view take ~30s.
+  const [jobs, allRows] = await Promise.all([cachedClosedJobs(), queryApplications()])
+  if (!jobs || !allRows) return cacheUnavailable('closed')
+
+  const byJob = new Map<string, ReturnType<typeof toJobApplication>[]>()
+  for (const r of allRows) {
+    if (!r.job_id) continue
+    const arr = byJob.get(r.job_id) ?? []
+    arr.push(toJobApplication(r))
+    byJob.set(r.job_id, arr)
+  }
+  const perJob = jobs.map((job) => ({ job, apps: byJob.get(job.id) ?? [] }))
 
   const roles = perJob.map(({ job, apps }) => {
     const hired = apps.filter((a) => a.status === 'Hired').length
@@ -118,13 +139,6 @@ async function closedPipeline() {
 }
 
 export async function GET(req: Request) {
-  if (!ashbyConfigured()) {
-    return NextResponse.json(
-      { configured: false, generatedAt: new Date().toISOString(), stageOrder: [], totals: null, roles: [] },
-      { headers: { 'Cache-Control': 'no-store' } }
-    )
-  }
-
   if (new URL(req.url).searchParams.get('status') === 'closed') {
     try {
       return await closedPipeline()
@@ -137,7 +151,8 @@ export async function GET(req: Request) {
   }
 
   try {
-    const [jobs, apps] = await Promise.all([listOpenJobs(), listActiveApplications()])
+    const [jobs, apps] = await Promise.all([cachedOpenJobs(), cachedActiveApplications()])
+    if (!jobs || !apps) return cacheUnavailable('open')
 
     // jobId -> role accumulator
     const roleMap = new Map<string, Role>()

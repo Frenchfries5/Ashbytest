@@ -1,35 +1,33 @@
 import { NextResponse } from 'next/server'
 import {
-  ashbyConfigured,
-  listJobCandidates,
   stageRank,
   isRelevantStage,
   STALLED_DAYS,
   type Candidate,
 } from '@/lib/ashby'
+import { cachedJobCandidates } from '@/lib/ashby-cache'
 
 export const dynamic = 'force-dynamic'
 
-// Fast path: job meta + active candidates grouped by stage. Deliberately cheap (no full-funnel
-// pull, no per-candidate history) so the drawer opens quickly. The heavier source/rejection/
-// time-in-stage analytics live in ./analysis and load progressively.
+// Fast path: job meta + active candidates grouped by stage, read from the Supabase cache.
+// The heavier source/rejection analytics — plus the time-in-stage figures, which still need
+// live per-candidate calls — live in ./analysis and load progressively.
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
 
-  if (!ashbyConfigured()) {
-    return NextResponse.json(
-      { configured: false, job: null, stages: [], total: 0, relevant: 0 },
-      { headers: { 'Cache-Control': 'no-store' } }
-    )
-  }
-
   try {
     // Job metadata is already in hand on the client (passed as the drawer's fallback from
     // the loaded overview), so we skip re-fetching it here to keep this path fast.
-    const candidates = await listJobCandidates(id)
+    const candidates = await cachedJobCandidates(id)
+    if (!candidates) {
+      return NextResponse.json(
+        { configured: false, job: null, stages: [], total: 0, relevant: 0 },
+        { headers: { 'Cache-Control': 'no-store' } }
+      )
+    }
 
     // Group active candidates by current stage.
     const byStage = new Map<string, Candidate[]>()

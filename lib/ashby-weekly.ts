@@ -1,9 +1,5 @@
-import {
-  ashbyConfigured,
-  listApplicationsSince,
-  listOpenJobs,
-  isRelevantApplication,
-} from '@/lib/ashby'
+import { ashbyConfigured, isRelevantApplication } from '@/lib/ashby'
+import { cachedApplicationsSince, cachedOpenJobs } from '@/lib/ashby-cache'
 
 // How far back to reconstruct weekly history.
 const HISTORY_DAYS = 365
@@ -25,7 +21,7 @@ async function resolveInboundJobId(): Promise<string | undefined> {
   const explicit = process.env.ASHBY_INBOUND_JOB_ID
   if (explicit) return explicit
   if (DEFAULT_INBOUND_JOB_ID) return DEFAULT_INBOUND_JOB_ID
-  const jobs = await listOpenJobs()
+  const jobs = (await cachedOpenJobs()) ?? []
   return jobs.find((j) => EVERGREEN_TITLE.test(j.title))?.id
 }
 
@@ -53,7 +49,9 @@ export async function getAshbyWeeklyRows(): Promise<{ configured: boolean; rows:
 
   const since = Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000
   const jobId = await resolveInboundJobId()
-  const apps = await listApplicationsSince(since, jobId)
+  // Read from the Supabase cache (kept fresh by /api/ashby/cache/sync) rather than calling Ashby.
+  const apps = await cachedApplicationsSince(since, jobId)
+  if (!apps) return { configured: false, rows: [] }
 
   // weekMondayMs -> counts
   const buckets = new Map<number, { date: Date; applicants: number; relevant: number }>()

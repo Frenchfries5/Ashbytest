@@ -1,4 +1,5 @@
-import { ashbyConfigured, listHiredApplications } from '@/lib/ashby'
+import { ashbyConfigured } from '@/lib/ashby'
+import { cachedHiredApplications } from '@/lib/ashby-cache'
 import { DAY, weekStartUTC, weekLabel } from '@/lib/week'
 
 // Weekly hire counts, org-wide. Ashby has no hire-date field — a hire is approximated as the
@@ -15,7 +16,8 @@ export async function getWeeklyHireCounts(
 ): Promise<{ configured: boolean; weeks: WeeklyHireCount[] }> {
   if (!ashbyConfigured()) return { configured: false, weeks: [] }
 
-  const hires = await listHiredApplications()
+  const hires = await cachedHiredApplications()
+  if (!hires) return { configured: false, weeks: [] }
   const currentMonday = weekStartUTC(Date.now())
   const start = currentMonday - (weekCount - 1) * 7 * DAY
 

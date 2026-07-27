@@ -9,6 +9,10 @@
       "schedule": "0 7 * * *"
     },
     {
+      "path": "/api/ashby/cache/sync",
+      "schedule": "30 7 * * *"
+    },
+    {
       "path": "/api/email/weekly",
       "schedule": "0 20 * * 5"
     }

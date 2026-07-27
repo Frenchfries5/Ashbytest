@@ -240,7 +240,7 @@ function prettyEmploymentType(v: string | null): string | null {
   return v.replace(/([a-z])([A-Z])/g, '$1 $2')
 }
 
-async function idNameMap(endpoint: string): Promise<Map<string, string>> {
+export async function idNameMap(endpoint: string): Promise<Map<string, string>> {
   const rows = await ashbyPaginate<RawNamed>(endpoint, {})
   const m = new Map<string, string>()
   for (const r of rows) if (r?.id && r.name) m.set(r.id, r.name)
@@ -450,30 +450,9 @@ export async function listHiredApplications(): Promise<JobApplication[]> {
 }
 
 // Matches the evergreen "Growth" broker role by title (e.g. "Commercial Insurance Broker, Growth").
-const GROWTH_ROLE_TITLE = /growth/i
-
-export interface PipelineOutcomes {
-  offerStage: number             // active candidates in an Offer stage (open roles)
-  growthPipeline: number | null  // active candidates in the Growth role(s); null if no open Growth role
-}
-
-// Offer-stage count + Growth-role active pipeline total, in a single active-application pull —
-// no extra Ashby endpoint. Scoped to OPEN jobs, matching the pipeline route's totals so the
-// dashboard and the email agree. Returns null entirely when Ashby isn't configured.
-export async function getPipelineOutcomes(): Promise<PipelineOutcomes | null> {
-  if (!ashbyConfigured()) return null
-  const [jobs, apps] = await Promise.all([listOpenJobs(), listActiveApplications()])
-  const openJobIds = new Set(jobs.map((j) => j.id))
-  const growthJobIds = new Set(jobs.filter((j) => GROWTH_ROLE_TITLE.test(j.title)).map((j) => j.id))
-  let offerStage = 0
-  let growthPipeline = 0
-  for (const a of apps) {
-    if (!a.jobId || !openJobIds.has(a.jobId)) continue
-    if (a.stage?.type === 'Offer') offerStage += 1
-    if (growthJobIds.has(a.jobId)) growthPipeline += 1
-  }
-  return { offerStage, growthPipeline: growthJobIds.size ? growthPipeline : null }
-}
+// (getPipelineOutcomes lives in lib/ashby-pipeline.ts — it reads the Supabase cache, and keeping
+// it out of this module avoids a circular import with lib/ashby-cache.ts.)
+export const GROWTH_ROLE_TITLE = /growth/i
 
 // Days the application has sat in its CURRENT stage (the history entry not yet left).
 export async function getDaysInCurrentStage(applicationId: string): Promise<number | null> {

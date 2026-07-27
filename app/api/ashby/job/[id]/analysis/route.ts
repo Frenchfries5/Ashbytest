@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server'
 import {
   ashbyConfigured,
-  listJobCandidates,
-  listAllJobApplications,
   getDaysInCurrentStage,
   mapLimit,
   isRelevantStage,
 } from '@/lib/ashby'
+import { cachedAllJobApplications, cachedJobCandidates } from '@/lib/ashby-cache'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,26 +13,26 @@ export const dynamic = 'force-dynamic'
 const MAX_HISTORY_LOOKUPS = 120
 
 // Heavier analytics for one job — loaded separately from the drawer's fast path so it can
-// stream in: full-funnel source→outcome breakdown, archive reasons, and accurate
-// time-in-current-stage per active candidate.
+// stream in: full-funnel source→outcome breakdown and archive reasons (both from the Supabase
+// cache), plus time-in-current-stage, which still needs a live Ashby call per active candidate
+// (stage history isn't available from the list endpoints, so it can't be cached).
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
 
-  if (!ashbyConfigured()) {
-    return NextResponse.json(
-      { configured: false, sourceBreakdown: [], archiveReasons: [], stageTiming: {} },
-      { headers: { 'Cache-Control': 'no-store' } }
-    )
-  }
-
   try {
     const [allApps, candidates] = await Promise.all([
-      listAllJobApplications(id),
-      listJobCandidates(id),
+      cachedAllJobApplications(id),
+      cachedJobCandidates(id),
     ])
+    if (!allApps || !candidates) {
+      return NextResponse.json(
+        { configured: false, sourceBreakdown: [], archiveReasons: [], stageTiming: {} },
+        { headers: { 'Cache-Control': 'no-store' } }
+      )
+    }
 
     // ── Source → outcome (which channels advance) ──
     interface SrcAgg { source: string; total: number; hired: number; advanced: number; early: number; archived: number }
@@ -67,8 +66,9 @@ export async function GET(
       .sort((a, b) => b.count - a.count)
 
     // ── Accurate time-in-current-stage per active candidate (applicationId -> days) ──
+    // The only live Ashby work left in the drawer: stage history isn't in the cached list data.
     const stageTiming: Record<string, number | null> = {}
-    if (candidates.length <= MAX_HISTORY_LOOKUPS) {
+    if (ashbyConfigured() && candidates.length <= MAX_HISTORY_LOOKUPS) {
       const times = await mapLimit(candidates, 10, (c) => getDaysInCurrentStage(c.applicationId))
       candidates.forEach((c, i) => { stageTiming[c.applicationId] = times[i] })
     }

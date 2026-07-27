@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
-import useSWR, { preload } from 'swr'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import useSWR, { preload, mutate as globalMutate } from 'swr'
 import { WeekData } from '@/lib/types'
 import { isCurrentWeekStart } from '@/lib/week'
 import { Topbar } from '@/components/dashboard/Topbar'
@@ -20,8 +20,38 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
 type TopTab = 'exec' | 'sourcing' | 'inbound' | 'ashby' | 'pipeline' | 'interviews'
 
+// Ashby data is served from a Supabase cache, so tabs paint instantly from possibly-stale rows.
+// On load we kick off an incremental sync (~1s; server-side throttled so concurrent viewers don't
+// each trigger one), then revalidate every Ashby-backed SWR key so the numbers update in place.
+function useAshbyRevalidate() {
+  const [syncing, setSyncing] = useState(false)
+  const ran = useRef(false)
+
+  useEffect(() => {
+    if (ran.current) return // once per mount (StrictMode double-invokes effects in dev)
+    ran.current = true
+    let cancelled = false
+    setSyncing(true)
+    fetch('/api/ashby/cache/sync', { method: 'POST' })
+      .then((r) => r.json().catch(() => null))
+      .then((j) => {
+        if (cancelled || !j?.ok) return
+        // Nothing changed and no sync ran — the on-screen data is already current.
+        if (j.skipped) return
+        return globalMutate((key) => typeof key === 'string' && key.includes('ashby'))
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setSyncing(false) })
+
+    return () => { cancelled = true }
+  }, [])
+
+  return syncing
+}
+
 export default function DashboardPage() {
   const [tab, setTab] = useState<TopTab>('exec')
+  const syncing = useAshbyRevalidate()
   // Outbound Sourcing is sourced from MeetAlfred (synced into Supabase), not the manual
   // spreadsheet. /api/meetalfred/sourcing returns the same WeekData[] shape the components expect.
   const { data, isLoading } = useSWR<{ weeks: WeekData[] }>('/api/meetalfred/sourcing', fetcher)
@@ -56,7 +86,7 @@ export default function DashboardPage() {
 
       {/* Top-level tab bar */}
       <div
-        className="sticky top-0 z-10 flex gap-1 px-6 pt-4 pb-0"
+        className="sticky top-0 z-10 flex items-center gap-1 px-6 pt-4 pb-0"
         style={{ backgroundColor: 'var(--ds-bg)', borderBottom: '1px solid var(--ds-border)' }}
       >
         {(['exec', 'sourcing', 'inbound', 'ashby', 'pipeline', 'interviews'] as TopTab[]).map((t) => (
@@ -75,6 +105,16 @@ export default function DashboardPage() {
             {t === 'exec' ? 'Executive Summary' : t === 'sourcing' ? 'Outbound Sourcing' : t === 'inbound' ? 'Inbound Postings' : t === 'ashby' ? 'Ashby Inbound' : t === 'pipeline' ? 'Pipeline' : 'Interviews'}
           </button>
         ))}
+
+        {/* Background refresh indicator — cached data is on screen while Ashby syncs. */}
+        {syncing && (
+          <span
+            className="ml-auto mb-2 font-mono text-[11px] px-2 py-1 rounded"
+            style={{ color: 'var(--ds-muted)', background: 'var(--ds-surface)', border: '1px solid var(--ds-border)' }}
+          >
+            Syncing latest from Ashby…
+          </span>
+        )}
       </div>
 
       <main className="max-w-6xl mx-auto px-4 py-10 flex flex-col gap-8">

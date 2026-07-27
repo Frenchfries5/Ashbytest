@@ -6,7 +6,7 @@ import { getWeeklySourcing } from '@/lib/sourcing'
 import { getAshbyWeeklyRows } from '@/lib/ashby-weekly'
 import { getWeeklyHireCounts } from '@/lib/ashby-hires'
 import { getRecruiterScreenFunnel } from '@/lib/ashby-interviews'
-import { getPipelineOutcomes } from '@/lib/ashby'
+import { getPipelineOutcomes } from '@/lib/ashby-pipeline'
 import {
   parseAshbyWeeks, computeOutboundScorecard, computeInboundScorecard,
   computeHiresScorecard, buildHeadline,
