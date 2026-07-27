@@ -388,10 +388,11 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
   const [editing, setEditing] = useState<Row | 'new' | null>(null)
   const [subTab, setSubTab] = useState<SubTab>('posts')
   // Ashby side of the same funnel (that req only), for the combined trend + spine.
+  // `linkedin` scope only, so the trend matches the LinkedIn-attributed funnel spine above it.
   const { data: ashbyFunnel } = useSWR<{
     configured: boolean
     dataStart: string | null
-    monthly: { month: string; applications: number; advanced: number; hired: number }[]
+    linkedin: { monthly: { month: string; applications: number; advanced: number; hired: number }[] } | null
   }>('/api/ashby/inbound-funnel', jsonFetcher, { refreshInterval: 300_000 })
 
   async function handleRefresh() {
@@ -521,7 +522,7 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
   // One trend instead of two: manual LinkedIn applicants and Ashby applications on the same axis,
   // since the gap between them is the point. Joined on YYYY-MM and clipped to the active range.
   const combinedTrend = useMemo(() => {
-    const ashbyByMonth = new Map((ashbyFunnel?.monthly ?? []).map(m => [m.month, m]))
+    const ashbyByMonth = new Map((ashbyFunnel?.linkedin?.monthly ?? []).map(m => [m.month, m]))
     const fromYm = activeRange.from.slice(0, 7)
     const toYm = activeRange.to.slice(0, 7)
     const yms = new Set<string>([
@@ -699,7 +700,7 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
             <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
               <span className={UPLABEL} style={{ color: 'var(--ds-muted)' }}>Applicants Over Time</span>
               <div className="flex gap-4 flex-wrap font-mono text-[11px]" style={{ color: 'var(--ds-muted)' }}>
-                {[{ label: 'LinkedIn applicants', color: C.blue }, { label: 'Reached Ashby', color: C.greenL }, { label: 'Hired', color: C.amber }].map(l => (
+                {[{ label: 'LinkedIn applicants', color: C.blue }, { label: 'Applications received', color: C.greenL }, { label: 'Hired', color: C.amber }].map(l => (
                   <span key={l.label} className="flex items-center gap-1.5">
                     <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: l.color, opacity: 0.9 }} />
                     {l.label}
@@ -713,13 +714,13 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
                 <YAxis tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={40} allowDecimals={false} />
                 <Tooltip content={<ChartTooltip />} />
                 <Bar dataKey="liApplicants" name="LinkedIn applicants" fill={C.blue} radius={[2, 2, 0, 0]} opacity={0.75} />
-                <Bar dataKey="ashbyApps" name="Reached Ashby" fill={C.greenL} radius={[2, 2, 0, 0]} opacity={0.75} />
+                <Bar dataKey="ashbyApps" name="Applications received" fill={C.greenL} radius={[2, 2, 0, 0]} opacity={0.75} />
                 <Line type="monotone" dataKey="hired" name="Hired" stroke={C.amber} strokeWidth={2} dot />
               </ComposedChart>
             </ResponsiveContainer>
             <p className="font-mono text-[10.5px] mt-2 leading-relaxed" style={{ color: C.dim }}>
-              Two different systems on one axis: LinkedIn&rsquo;s reported applicants vs applications that actually
-              landed in Ashby for that req{ashbyStartLabel ? `, which has history from ${ashbyStartLabel} onward` : ''}.
+              Two different systems on one axis: LinkedIn&rsquo;s reported applicants vs LinkedIn-sourced
+              applications that landed in Ashby for that req{ashbyStartLabel ? `, which has history from ${ashbyStartLabel} onward` : ''}.
               A month with Ashby volume but no LinkedIn bar means posts weren&rsquo;t logged — not that nothing ran.
             </p>
           </div>
