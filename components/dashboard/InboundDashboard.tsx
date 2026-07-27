@@ -6,6 +6,22 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, BarChart, Bar, ComposedChart,
 } from 'recharts'
+import { InboundPassThrough } from './InboundPassThrough'
+import { SourceOutcomes } from './SourceOutcomes'
+import { AshbyDashboard } from './AshbyDashboard'
+
+// Detail lives behind sub-tabs so the main view stays about one screen. Everything here is a
+// drill-down on the same funnel shown up top.
+const MON_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+type SubTab = 'posts' | 'titles' | 'posters' | 'channels' | 'ashby'
+const SUBTABS: { id: SubTab; label: string }[] = [
+  { id: 'posts', label: 'Posts' },
+  { id: 'titles', label: 'Titles' },
+  { id: 'posters', label: 'Posters' },
+  { id: 'channels', label: 'Channels' },
+  { id: 'ashby', label: 'Ashby detail' },
+]
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -60,6 +76,7 @@ function postingToRow(p: DbPosting): Row {
 
 interface MonthBucket {
   label: string
+  ym: string             // YYYY-MM — joins this manual series to the Ashby monthly series
   sortKey: number
   posts: number
   postsWithRel: number   // posts in this month where "relevant" was actually recorded
@@ -175,7 +192,7 @@ function buildAggregates(rows: Row[]): Aggregates {
   rows.forEach(r => {
     if (!r.date) return
     const k = monthKey(r.date)
-    if (!mMap[k]) mMap[k] = { label: k, sortKey: monthSort(r.date), posts: 0, postsWithRel: 0, views: 0, applicants: 0, relevant: 0, relevantMeasuredApps: 0 }
+    if (!mMap[k]) mMap[k] = { label: k, ym: r.date.slice(0, 7), sortKey: monthSort(r.date), posts: 0, postsWithRel: 0, views: 0, applicants: 0, relevant: 0, relevantMeasuredApps: 0 }
     mMap[k].posts++
     mMap[k].views += r.views ?? 0
     mMap[k].applicants += r.applicants ?? 0
@@ -369,6 +386,13 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
   const { data, isLoading, error } = useSWR<{ postings: DbPosting[] }>(POSTINGS_KEY, jsonFetcher, { refreshInterval: 300_000 })
   const [refreshing, setRefreshing] = useState(false)
   const [editing, setEditing] = useState<Row | 'new' | null>(null)
+  const [subTab, setSubTab] = useState<SubTab>('posts')
+  // Ashby side of the same funnel (that req only), for the combined trend + spine.
+  const { data: ashbyFunnel } = useSWR<{
+    configured: boolean
+    dataStart: string | null
+    monthly: { month: string; applications: number; advanced: number; hired: number }[]
+  }>('/api/ashby/inbound-funnel', jsonFetcher, { refreshInterval: 300_000 })
 
   async function handleRefresh() {
     setRefreshing(true)
@@ -494,6 +518,33 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
 
   const keywordAggs = useMemo(() => buildKeywordAggs(filteredRows), [filteredRows])
 
+  // One trend instead of two: manual LinkedIn applicants and Ashby applications on the same axis,
+  // since the gap between them is the point. Joined on YYYY-MM and clipped to the active range.
+  const combinedTrend = useMemo(() => {
+    const ashbyByMonth = new Map((ashbyFunnel?.monthly ?? []).map(m => [m.month, m]))
+    const fromYm = activeRange.from.slice(0, 7)
+    const toYm = activeRange.to.slice(0, 7)
+    const yms = new Set<string>([
+      ...agg.monthly.map(m => m.ym),
+      ...[...ashbyByMonth.keys()].filter(ym => ym >= fromYm && ym <= toYm),
+    ])
+    return [...yms].sort().map(ym => {
+      const manual = agg.monthly.find(m => m.ym === ym)
+      const a = ashbyByMonth.get(ym)
+      const [y, mo] = ym.split('-')
+      return {
+        label: manual?.label ?? `${MON_SHORT[Number(mo) - 1]} ${y.slice(2)}`,
+        liApplicants: manual?.applicants ?? 0,
+        ashbyApps: a?.applications ?? 0,
+        hired: a?.hired ?? 0,
+      }
+    })
+  }, [agg.monthly, ashbyFunnel, activeRange])
+
+  const ashbyStartLabel = ashbyFunnel?.dataStart
+    ? new Date(ashbyFunnel.dataStart).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+    : null
+
   const SortArrow = ({ k }: { k: SortKey }) => (
     <span className="opacity-50 text-[9px] ml-0.5">
       {sortKey === k ? (sortDir === 'asc' ? '▲' : '▼') : ''}
@@ -613,6 +664,8 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
 
       {!isLoading && !isNoData && (
         <>
+          {/* ── The whole inbound funnel in one row: ads → ATS → outcomes ───────────── */}
+          <InboundPassThrough />
           {/* KPI strip — quality first. Apply rate is deliberately NOT here: measured across
               these posts it has ~zero correlation with whether applicants are relevant, so it
               reads as a headline result while only describing how clickable a title was. It
@@ -640,40 +693,54 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
               </div>
             ))}
           </div>
-
-          {/* Reach — real, but upstream of quality, so it's one line instead of four tiles. */}
-          <div className="rounded-lg px-4 py-3 font-mono text-xs flex flex-wrap gap-x-5 gap-y-1" style={{ ...CARD, color: 'var(--ds-muted)' }}>
-            <span className={UPLABEL} style={{ color: C.dim }}>Reach</span>
-            <span>{agg.totalViews.toLocaleString()} views</span>
-            <span>{agg.totalApplicants.toLocaleString()} applicants</span>
-            <span>{f1(pct(agg.totalApplicants, agg.totalViews))}% apply rate</span>
-          </div>
-
-          {/* Activity over time chart */}
+          {/* ── One trend, not two. The manual LinkedIn count and the Ashby count sit on the
+                 same axis on purpose: where they diverge is the interesting part. ────────── */}
           <div className="rounded-lg p-5" style={CARD}>
             <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-              <span className={UPLABEL} style={{ color: 'var(--ds-muted)' }}>Activity Over Time</span>
+              <span className={UPLABEL} style={{ color: 'var(--ds-muted)' }}>Applicants Over Time</span>
               <div className="flex gap-4 flex-wrap font-mono text-[11px]" style={{ color: 'var(--ds-muted)' }}>
-                {[{ label: 'Views', color: C.green }, { label: 'Applicants', color: C.blue }, { label: 'Relevant', color: C.greenL }].map(l => (
+                {[{ label: 'LinkedIn applicants', color: C.blue }, { label: 'Reached Ashby', color: C.greenL }, { label: 'Hired', color: C.amber }].map(l => (
                   <span key={l.label} className="flex items-center gap-1.5">
-                    <span className="inline-block w-2.5 h-0.5 rounded-sm" style={{ background: l.color }} />
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: l.color, opacity: 0.9 }} />
                     {l.label}
                   </span>
                 ))}
               </div>
             </div>
             <ResponsiveContainer width="100%" height={230}>
-              <LineChart data={agg.monthly} margin={{ top: 4, right: 10, bottom: 4, left: 0 }}>
-                <XAxis dataKey="label" tick={{ fill: C.dim, fontSize: 10.5, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={40} />
+              <ComposedChart data={combinedTrend} margin={{ top: 4, right: 16, bottom: 4, left: 0 }} barGap={4} barCategoryGap="26%">
+                <XAxis dataKey="label" tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={16} />
+                <YAxis tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={40} allowDecimals={false} />
                 <Tooltip content={<ChartTooltip />} />
-                <Line type="monotone" dataKey="views"      name="Views"      stroke={C.green}  strokeWidth={2} dot={agg.monthly.length === 1} />
-                <Line type="monotone" dataKey="applicants" name="Applicants" stroke={C.blue}   strokeWidth={2} dot={agg.monthly.length === 1} />
-                <Line type="monotone" dataKey="relevant"   name="Relevant"   stroke={C.greenL} strokeWidth={2} dot={agg.monthly.length === 1} />
-              </LineChart>
+                <Bar dataKey="liApplicants" name="LinkedIn applicants" fill={C.blue} radius={[2, 2, 0, 0]} opacity={0.75} />
+                <Bar dataKey="ashbyApps" name="Reached Ashby" fill={C.greenL} radius={[2, 2, 0, 0]} opacity={0.75} />
+                <Line type="monotone" dataKey="hired" name="Hired" stroke={C.amber} strokeWidth={2} dot />
+              </ComposedChart>
             </ResponsiveContainer>
+            <p className="font-mono text-[10.5px] mt-2 leading-relaxed" style={{ color: C.dim }}>
+              Two different systems on one axis: LinkedIn&rsquo;s reported applicants vs applications that actually
+              landed in Ashby for that req{ashbyStartLabel ? `, which has history from ${ashbyStartLabel} onward` : ''}.
+              A month with Ashby volume but no LinkedIn bar means posts weren&rsquo;t logged — not that nothing ran.
+            </p>
+          </div>
+          {/* ── Drill-down behind sub-tabs, so the page stays about one screen ──────── */}
+          <div className="flex items-center gap-1 flex-wrap mt-1" style={{ borderBottom: '1px solid var(--ds-border)' }}>
+            {SUBTABS.map(t => (
+              <button key={t.id} onClick={() => setSubTab(t.id)}
+                className="font-mono text-xs px-4 py-2 transition-colors"
+                style={{
+                  color: subTab === t.id ? 'var(--ds-text)' : 'var(--ds-muted)',
+                  background: 'none', border: 'none',
+                  borderBottom: subTab === t.id ? '2px solid var(--ds-green-light)' : '2px solid transparent',
+                  marginBottom: -1, cursor: 'pointer',
+                }}>
+                {t.label}
+              </button>
+            ))}
           </div>
 
+          {subTab === 'posts' && (
+            <>
           {/* Rate charts side-by-side */}
           <div className="flex flex-col md:flex-row gap-3">
             {/* Apply rate */}
@@ -762,128 +829,6 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
               </p>
             </div>
           )}
-
-          {/* Where inbound candidates actually end up — extends the funnel past "relevant" using
-              Ashby outcomes. Channel-level only: the postings tracker and Ashby share no key, so a
-              specific post can't be tied to a specific hire. */}
-
-          {/* By Keyword section */}
-          <div>
-            <h2 className={`${UPLABEL} mb-3`} style={{ color: 'var(--ds-muted)' }}>By Job Title Keyword</h2>
-            <div className="rounded-lg p-5 mb-3" style={CARD}>
-              <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-                <span className={UPLABEL} style={{ color: 'var(--ds-muted)' }}>Applicants by keyword group</span>
-                <div className="flex gap-4 font-mono text-[11px]" style={{ color: C.muted }}>
-                  {[{ label: 'Applicants', color: C.blue }, { label: 'Relevant', color: C.greenL }, { label: 'Relevance %', color: C.amber }].map(l => (
-                    <span key={l.label} className="flex items-center gap-1.5">
-                      <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: l.color, opacity: 0.85 }} />
-                      {l.label}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <ResponsiveContainer width="100%" height={200}>
-                <ComposedChart data={keywordAggs} margin={{ top: 4, right: 16, bottom: 4, left: 0 }} barGap={4} barCategoryGap="28%">
-                  <XAxis dataKey="label" tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} />
-                  <YAxis yAxisId="count" tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={38} />
-                  <YAxis yAxisId="pct" orientation="right" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fill: C.amber, fontSize: 10, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={40} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Bar yAxisId="count" dataKey="applicants" name="Applicants" fill={C.blue}   radius={[3, 3, 0, 0]} opacity={0.85} />
-                  <Bar yAxisId="count" dataKey="relevant"   name="Relevant"   fill={C.greenL} radius={[3, 3, 0, 0]} opacity={0.85} />
-                  <Line yAxisId="pct" dataKey="relRate" name="Relevance %" stroke="transparent" isAnimationActive={false} dot={{ r: 4, fill: C.amber, stroke: C.amber }} activeDot={{ r: 5 }} legendType="circle" />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {keywordAggs.map((kw, i) => {
-                const col = KW_PALETTE[i % KW_PALETTE.length]
-                const maxApps = Math.max(...keywordAggs.map(k => k.applicants), 1)
-                return (
-                  <div key={kw.label} className="rounded-lg p-4" style={CARD}>
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: col }} />
-                        <span className="text-sm font-medium" style={{ color: 'var(--ds-text)' }}>{kw.label}</span>
-                      </div>
-                      <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(55,138,221,0.15)', color: C.blue }}>
-                        {kw.posts} post{kw.posts !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 mb-3">
-                      {[
-                        { lab: 'Applicants',    val: kw.applicants.toLocaleString(),                       color: 'var(--ds-text)' },
-                        { lab: 'Relevant',      val: kw.relevant > 0 ? kw.relevant.toLocaleString() : '—', color: 'var(--ds-text)' },
-                        { lab: 'Apply Rate',    val: f1(kw.applyRate) + '%',                                color: rateColor(kw.applyRate) },
-                        { lab: 'Rel. Rate',     val: kw.relRate > 0 ? f1(kw.relRate) + '%' : '—',           color: kw.relRate > 0 ? rateColor(kw.relRate) : C.dim },
-                        { lab: 'Total Views',   val: kw.views.toLocaleString(),                             color: 'var(--ds-text)' },
-                        { lab: 'Avg Days Live', val: kw.avgDuration > 0 ? f1(kw.avgDuration) : '—',        color: 'var(--ds-text)' },
-                      ].map(s => (
-                        <div key={s.lab}>
-                          <span className="font-mono text-[10px] block mb-0.5" style={{ color: C.dim }}>{s.lab}</span>
-                          <span className="font-mono text-base font-medium" style={{ color: s.color }}>{s.val}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mb-3">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-mono text-[10px]" style={{ color: C.dim }}>Share of applicants</span>
-                        <span className="font-mono text-[10px]" style={{ color: C.dim }}>{f1((kw.applicants / maxApps) * 100)}%</span>
-                      </div>
-                      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
-                        <div className="h-full rounded-full" style={{ width: `${(kw.applicants / maxApps) * 100}%`, background: col, opacity: 0.85 }} />
-                      </div>
-                    </div>
-                    <details>
-                      <summary className="font-mono text-[10px] cursor-pointer select-none" style={{ color: C.dim }}>
-                        {kw.titlesUsed.length} title variant{kw.titlesUsed.length !== 1 ? 's' : ''} used
-                      </summary>
-                      <ul className="mt-2 flex flex-col gap-1">
-                        {kw.titlesUsed.map(t => (
-                          <li key={t} className="font-mono text-[10px] pl-2" style={{ color: C.muted, borderLeft: `2px solid ${col}44` }}>{t}</li>
-                        ))}
-                      </ul>
-                    </details>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* Per-poster cards */}
-          <div>
-            <h2 className={`${UPLABEL} mb-3`} style={{ color: 'var(--ds-muted)' }}>Per-Poster Performance</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {agg.posters.map((p) => {
-                const col = posterColorMap[p.name] ?? C.muted
-                const series = posterMonthlySeries(p.name, 'applicants')
-                return (
-                  <div key={p.name} className="rounded-lg p-4" style={CARD}>
-                    <div className="flex items-start justify-between mb-3">
-                      <span className="text-sm font-medium" style={{ color: 'var(--ds-text)' }}>{p.name}</span>
-                      <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(55,138,221,0.15)', color: C.blue }}>
-                        {p.posts} post{p.posts !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 mb-3">
-                      {[
-                        { lab: 'Total Views',      val: p.views.toLocaleString(),      color: 'var(--ds-text)' },
-                        { lab: 'Total Applicants', val: p.applicants.toLocaleString(), color: 'var(--ds-text)' },
-                        { lab: 'Apply Rate',       val: f1(p.applyRate) + '%',         color: rateColor(p.applyRate) },
-                        { lab: 'Avg Days Live',    val: f1(p.avgDur),                  color: 'var(--ds-text)' },
-                      ].map(s => (
-                        <div key={s.lab}>
-                          <span className="font-mono text-[11px] block mb-0.5" style={{ color: 'var(--ds-dim)' }}>{s.lab}</span>
-                          <span className="font-mono text-lg font-medium" style={{ color: s.color }}>{s.val}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <span className="font-mono text-[11px] block mb-1" style={{ color: 'var(--ds-dim)' }}>Applicants by month</span>
-                    <SparkBars values={series.length ? series : [0]} color={col} height={40} />
-                  </div>
-                )
-              })}
-            </div>
-          </div>
 
           {/* Detail table */}
           <div>
@@ -1014,6 +959,131 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
               &ldquo;Relevant&rdquo; was tracked inconsistently; relevance rates use only posts where it was measured.
             </p>
           </div>
+            </>
+          )}
+
+          {subTab === 'titles' && (
+          <div>
+            <h2 className={`${UPLABEL} mb-3`} style={{ color: 'var(--ds-muted)' }}>By Job Title Keyword</h2>
+            <div className="rounded-lg p-5 mb-3" style={CARD}>
+              <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+                <span className={UPLABEL} style={{ color: 'var(--ds-muted)' }}>Applicants by keyword group</span>
+                <div className="flex gap-4 font-mono text-[11px]" style={{ color: C.muted }}>
+                  {[{ label: 'Applicants', color: C.blue }, { label: 'Relevant', color: C.greenL }, { label: 'Relevance %', color: C.amber }].map(l => (
+                    <span key={l.label} className="flex items-center gap-1.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: l.color, opacity: 0.85 }} />
+                      {l.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={200}>
+                <ComposedChart data={keywordAggs} margin={{ top: 4, right: 16, bottom: 4, left: 0 }} barGap={4} barCategoryGap="28%">
+                  <XAxis dataKey="label" tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} />
+                  <YAxis yAxisId="count" tick={{ fill: C.dim, fontSize: 11, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={38} />
+                  <YAxis yAxisId="pct" orientation="right" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fill: C.amber, fontSize: 10, fontFamily: 'DM Mono, monospace' }} axisLine={false} tickLine={false} width={40} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Bar yAxisId="count" dataKey="applicants" name="Applicants" fill={C.blue}   radius={[3, 3, 0, 0]} opacity={0.85} />
+                  <Bar yAxisId="count" dataKey="relevant"   name="Relevant"   fill={C.greenL} radius={[3, 3, 0, 0]} opacity={0.85} />
+                  <Line yAxisId="pct" dataKey="relRate" name="Relevance %" stroke="transparent" isAnimationActive={false} dot={{ r: 4, fill: C.amber, stroke: C.amber }} activeDot={{ r: 5 }} legendType="circle" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {keywordAggs.map((kw, i) => {
+                const col = KW_PALETTE[i % KW_PALETTE.length]
+                const maxApps = Math.max(...keywordAggs.map(k => k.applicants), 1)
+                return (
+                  <div key={kw.label} className="rounded-lg p-4" style={CARD}>
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: col }} />
+                        <span className="text-sm font-medium" style={{ color: 'var(--ds-text)' }}>{kw.label}</span>
+                      </div>
+                      <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(55,138,221,0.15)', color: C.blue }}>
+                        {kw.posts} post{kw.posts !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 mb-3">
+                      {[
+                        { lab: 'Applicants',    val: kw.applicants.toLocaleString(),                       color: 'var(--ds-text)' },
+                        { lab: 'Relevant',      val: kw.relevant > 0 ? kw.relevant.toLocaleString() : '—', color: 'var(--ds-text)' },
+                        { lab: 'Apply Rate',    val: f1(kw.applyRate) + '%',                                color: rateColor(kw.applyRate) },
+                        { lab: 'Rel. Rate',     val: kw.relRate > 0 ? f1(kw.relRate) + '%' : '—',           color: kw.relRate > 0 ? rateColor(kw.relRate) : C.dim },
+                        { lab: 'Total Views',   val: kw.views.toLocaleString(),                             color: 'var(--ds-text)' },
+                        { lab: 'Avg Days Live', val: kw.avgDuration > 0 ? f1(kw.avgDuration) : '—',        color: 'var(--ds-text)' },
+                      ].map(s => (
+                        <div key={s.lab}>
+                          <span className="font-mono text-[10px] block mb-0.5" style={{ color: C.dim }}>{s.lab}</span>
+                          <span className="font-mono text-base font-medium" style={{ color: s.color }}>{s.val}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mb-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-mono text-[10px]" style={{ color: C.dim }}>Share of applicants</span>
+                        <span className="font-mono text-[10px]" style={{ color: C.dim }}>{f1((kw.applicants / maxApps) * 100)}%</span>
+                      </div>
+                      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                        <div className="h-full rounded-full" style={{ width: `${(kw.applicants / maxApps) * 100}%`, background: col, opacity: 0.85 }} />
+                      </div>
+                    </div>
+                    <details>
+                      <summary className="font-mono text-[10px] cursor-pointer select-none" style={{ color: C.dim }}>
+                        {kw.titlesUsed.length} title variant{kw.titlesUsed.length !== 1 ? 's' : ''} used
+                      </summary>
+                      <ul className="mt-2 flex flex-col gap-1">
+                        {kw.titlesUsed.map(t => (
+                          <li key={t} className="font-mono text-[10px] pl-2" style={{ color: C.muted, borderLeft: `2px solid ${col}44` }}>{t}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+          )}
+
+          {subTab === 'posters' && (
+          <div>
+            <h2 className={`${UPLABEL} mb-3`} style={{ color: 'var(--ds-muted)' }}>Per-Poster Performance</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {agg.posters.map((p) => {
+                const col = posterColorMap[p.name] ?? C.muted
+                const series = posterMonthlySeries(p.name, 'applicants')
+                return (
+                  <div key={p.name} className="rounded-lg p-4" style={CARD}>
+                    <div className="flex items-start justify-between mb-3">
+                      <span className="text-sm font-medium" style={{ color: 'var(--ds-text)' }}>{p.name}</span>
+                      <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(55,138,221,0.15)', color: C.blue }}>
+                        {p.posts} post{p.posts !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 mb-3">
+                      {[
+                        { lab: 'Total Views',      val: p.views.toLocaleString(),      color: 'var(--ds-text)' },
+                        { lab: 'Total Applicants', val: p.applicants.toLocaleString(), color: 'var(--ds-text)' },
+                        { lab: 'Apply Rate',       val: f1(p.applyRate) + '%',         color: rateColor(p.applyRate) },
+                        { lab: 'Avg Days Live',    val: f1(p.avgDur),                  color: 'var(--ds-text)' },
+                      ].map(s => (
+                        <div key={s.lab}>
+                          <span className="font-mono text-[11px] block mb-0.5" style={{ color: 'var(--ds-dim)' }}>{s.lab}</span>
+                          <span className="font-mono text-lg font-medium" style={{ color: s.color }}>{s.val}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <span className="font-mono text-[11px] block mb-1" style={{ color: 'var(--ds-dim)' }}>Applicants by month</span>
+                    <SparkBars values={series.length ? series : [0]} color={col} height={40} />
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+          )}
+
+          {subTab === 'channels' && <SourceOutcomes />}
+          {subTab === 'ashby' && <AshbyDashboard />}
         </>
       )}
 

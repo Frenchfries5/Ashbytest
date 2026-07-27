@@ -11,11 +11,9 @@ import { RateCharts } from '@/components/dashboard/RateCharts'
 import { RecruiterCards } from '@/components/dashboard/RecruiterCards'
 import { WeeklyDetail } from '@/components/dashboard/WeeklyDetail'
 import { InboundDashboard } from '@/components/dashboard/InboundDashboard'
-import { AshbyDashboard, fetchAshbyWeekly } from '@/components/dashboard/AshbyDashboard'
+import { fetchAshbyWeekly } from '@/components/dashboard/AshbyDashboard'
 import { PipelineDashboard } from '@/components/dashboard/PipelineDashboard'
 import { InterviewsDashboard } from '@/components/dashboard/InterviewsDashboard'
-import { InboundPassThrough } from '@/components/dashboard/InboundPassThrough'
-import { SourceOutcomes } from '@/components/dashboard/SourceOutcomes'
 import { ExecutiveSummary, fetchAshbyWeeks, fetchWeeklyHires, fetchPipelineOutcomes, fetchRecruiterScreens, fetchInterviewFunnel } from '@/components/dashboard/ExecutiveSummary'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
@@ -143,15 +141,9 @@ export default function DashboardPage() {
             <WeeklyDetail weeks={weeks} />
           </>
         ) : tab === 'inbound' ? (
-          // One inbound story, read top to bottom: what we advertised on LinkedIn (manual
-          // tracker) → how much of it reached the ATS and what became of it (Ashby) → which
-          // channels actually convert org-wide.
-          <>
-            <InboundDashboard />
-            <InboundPassThrough />
-            <AshbyDashboard />
-            <SourceOutcomes />
-          </>
+          // Composes its own funnel spine, combined trend and sub-tabbed detail (which is where
+          // the Ashby view and channel outcomes now live).
+          <InboundDashboard />
         ) : tab === 'pipeline' ? (
           <PipelineDashboard />
         ) : (
