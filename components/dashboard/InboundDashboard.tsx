@@ -62,10 +62,22 @@ interface MonthBucket {
   label: string
   sortKey: number
   posts: number
+  postsWithRel: number   // posts in this month where "relevant" was actually recorded
   views: number
   applicants: number
   relevant: number
   relevantMeasuredApps: number
+}
+
+// Paid-vs-organic split. Paid promotion buys reach, so comparing QUALITY (not apply rate)
+// between the two is the decision-useful cut.
+interface SplitAgg {
+  posts: number
+  views: number
+  applicants: number
+  relevant: number
+  relevantMeasuredApps: number
+  postsWithRel: number
 }
 
 interface PosterAgg {
@@ -90,6 +102,13 @@ interface Aggregates {
   totalViews: number
   totalApplicants: number
   totalRelevant: number
+  // Applicants only from posts where relevance WAS recorded — the correct denominator for
+  // relevance rate and screening burden. Using totalApplicants would understate both, since
+  // relevance went untracked on most 2025-H1 posts.
+  relevantMeasuredApps: number
+  postsWithRelevance: number
+  paid: SplitAgg
+  organic: SplitAgg
   avgDuration: number
   dateStart: string
   dateEnd: string
@@ -133,17 +152,35 @@ function buildAggregates(rows: Row[]): Aggregates {
   const durs = rows.filter(r => r.duration != null).map(r => r.duration!)
   const avgDuration = durs.length ? durs.reduce((a, b) => a + b, 0) / durs.length : 0
 
+  // Relevance-measured totals + paid/organic split.
+  const relevantMeasuredApps = rows.filter(r => r.relevant != null).reduce((s, r) => s + (r.applicants ?? 0), 0)
+  const postsWithRelevance = rows.filter(r => r.relevant != null).length
+  const emptySplit = (): SplitAgg => ({ posts: 0, views: 0, applicants: 0, relevant: 0, relevantMeasuredApps: 0, postsWithRel: 0 })
+  const paid = emptySplit()
+  const organic = emptySplit()
+  rows.forEach(r => {
+    const t = r.paid ? paid : organic
+    t.posts++
+    t.views += r.views ?? 0
+    t.applicants += r.applicants ?? 0
+    if (r.relevant != null) {
+      t.relevant += r.relevant
+      t.relevantMeasuredApps += r.applicants ?? 0
+      t.postsWithRel++
+    }
+  })
+
   // monthly
   const mMap: Record<string, MonthBucket> = {}
   rows.forEach(r => {
     if (!r.date) return
     const k = monthKey(r.date)
-    if (!mMap[k]) mMap[k] = { label: k, sortKey: monthSort(r.date), posts: 0, views: 0, applicants: 0, relevant: 0, relevantMeasuredApps: 0 }
+    if (!mMap[k]) mMap[k] = { label: k, sortKey: monthSort(r.date), posts: 0, postsWithRel: 0, views: 0, applicants: 0, relevant: 0, relevantMeasuredApps: 0 }
     mMap[k].posts++
     mMap[k].views += r.views ?? 0
     mMap[k].applicants += r.applicants ?? 0
     mMap[k].relevant += r.relevant ?? 0
-    if (r.relevant != null) mMap[k].relevantMeasuredApps += r.applicants ?? 0
+    if (r.relevant != null) { mMap[k].relevantMeasuredApps += r.applicants ?? 0; mMap[k].postsWithRel++ }
   })
   const monthly = Object.values(mMap).sort((a, b) => a.sortKey - b.sortKey)
 
@@ -179,7 +216,8 @@ function buildAggregates(rows: Row[]): Aggregates {
   })
 
   return {
-    totalPosts: rows.length, totalViews, totalApplicants, totalRelevant, avgDuration,
+    totalPosts: rows.length, totalViews, totalApplicants, totalRelevant,
+    relevantMeasuredApps, postsWithRelevance, paid, organic, avgDuration,
     dateStart: dates.length ? fmtDate(dates[0]) : '—',
     dateEnd: dates.length ? fmtDate(dates[dates.length - 1]) : '—',
     monthly, posters, platforms: Object.values(plMap), rows,
@@ -428,14 +466,23 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
   }
 
   // rate chart data
+  //
+  // Relevance was recorded on only a handful of early posts (e.g. 3 of 24 in 2025-H1), so a month
+  // where one post out of six was tracked is not comparable to a fully-tracked month — plotting it
+  // anyway dragged the trend and the average line. Only months where at least half the posts have
+  // relevance recorded are plotted; the rest render as gaps.
+  const REL_COVERAGE_MIN = 0.5
+  const relCovered = (m: MonthBucket) => m.posts > 0 && m.postsWithRel / m.posts >= REL_COVERAGE_MIN
   const rateData = agg.monthly.map(m => ({
     label: m.label,
     applyRate: m.views ? pct(m.applicants, m.views) : 0,
-    relevanceRate: m.relevantMeasuredApps ? pct(m.relevant, m.relevantMeasuredApps) : null,
+    relevanceRate: m.relevantMeasuredApps && relCovered(m) ? pct(m.relevant, m.relevantMeasuredApps) : null,
   }))
   const avgApply = rateData.length ? rateData.reduce((s, d) => s + d.applyRate, 0) / rateData.length : 0
   const relValid = rateData.filter(d => d.relevanceRate != null).map(d => d.relevanceRate!)
   const avgRel = relValid.length ? relValid.reduce((s, v) => s + v, 0) / relValid.length : 0
+  // Months excluded from the relevance view for thin tracking — surfaced so the gaps are explained.
+  const relSkipped = agg.monthly.filter(m => m.posts > 0 && !relCovered(m)).length
 
   // detail summary
   const summaryRows = effectivePoster === 'all' ? agg.rows : agg.rows.filter(r => r.poster === effectivePoster)
@@ -566,20 +613,40 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
 
       {!isLoading && !isNoData && (
         <>
-          {/* KPI strip */}
+          {/* KPI strip — quality first. Apply rate is deliberately NOT here: measured across
+              these posts it has ~zero correlation with whether applicants are relevant, so it
+              reads as a headline result while only describing how clickable a title was. It
+              still lives in the reach line below and in the per-post detail table. */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {[
-              { label: 'Total Views',      value: agg.totalViews.toLocaleString(),      spark: agg.monthly.map(m => m.views),      color: C.green },
-              { label: 'Total Applicants', value: agg.totalApplicants.toLocaleString(), spark: agg.monthly.map(m => m.applicants), color: C.greenL },
-              { label: 'Apply Rate',       value: f1(pct(agg.totalApplicants, agg.totalViews)) + '%', spark: agg.monthly.map(m => pct(m.applicants, m.views)), color: C.blue },
-              { label: 'Avg Days Live',    value: f1(agg.avgDuration),                  spark: agg.monthly.map(m => m.posts),      color: C.amber },
+              { label: 'Relevant Candidates', value: agg.totalRelevant.toLocaleString(),
+                sub: `from ${agg.postsWithRelevance} tracked post${agg.postsWithRelevance === 1 ? '' : 's'}`,
+                spark: agg.monthly.map(m => m.relevant), color: C.greenL },
+              { label: 'Relevance Rate', value: agg.relevantMeasuredApps ? f1(pct(agg.totalRelevant, agg.relevantMeasuredApps)) + '%' : '—',
+                sub: 'relevant / applicants',
+                spark: agg.monthly.map(m => pct(m.relevant, m.relevantMeasuredApps)), color: C.green },
+              { label: 'Screening Burden', value: agg.totalRelevant ? f1(agg.relevantMeasuredApps / agg.totalRelevant) : '—',
+                sub: 'applicants read per relevant one',
+                spark: agg.monthly.map(m => (m.relevant ? m.relevantMeasuredApps / m.relevant : 0)), color: C.amber },
+              { label: 'Posts Published', value: agg.totalPosts.toLocaleString(),
+                sub: `${f1(agg.avgDuration)} avg days live`,
+                spark: agg.monthly.map(m => m.posts), color: C.blue },
             ].map(kpi => (
               <div key={kpi.label} className="flex flex-col gap-2 p-4 rounded-lg" style={CARD}>
                 <span className={UPLABEL} style={{ color: 'var(--ds-muted)' }}>{kpi.label}</span>
                 <span className="font-mono text-[26px] font-medium leading-none" style={{ color: 'var(--ds-text)' }}>{kpi.value}</span>
+                <span className="font-mono text-[11px]" style={{ color: C.dim }}>{kpi.sub}</span>
                 <SparkBars values={kpi.spark} color={kpi.color} height={32} />
               </div>
             ))}
+          </div>
+
+          {/* Reach — real, but upstream of quality, so it's one line instead of four tiles. */}
+          <div className="rounded-lg px-4 py-3 font-mono text-xs flex flex-wrap gap-x-5 gap-y-1" style={{ ...CARD, color: 'var(--ds-muted)' }}>
+            <span className={UPLABEL} style={{ color: C.dim }}>Reach</span>
+            <span>{agg.totalViews.toLocaleString()} views</span>
+            <span>{agg.totalApplicants.toLocaleString()} applicants</span>
+            <span>{f1(pct(agg.totalApplicants, agg.totalViews))}% apply rate</span>
           </div>
 
           {/* Activity over time chart */}
@@ -641,8 +708,65 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
                   <Line type="monotone" dataKey="relevanceRate" name="Relevance Rate" stroke={C.amber} strokeWidth={2} dot connectNulls={false} />
                 </LineChart>
               </ResponsiveContainer>
+              {relSkipped > 0 && (
+                <p className="font-mono text-[10.5px] mt-2 leading-relaxed" style={{ color: C.dim }}>
+                  {relSkipped} month{relSkipped === 1 ? '' : 's'} hidden — relevance was recorded on fewer than half
+                  those posts, so the rate isn&rsquo;t comparable.
+                </p>
+              )}
             </div>
           </div>
+
+          {/* Paid vs organic — the comparison that matters is QUALITY, not apply rate. Promoted
+              posts reliably buy more applicants; whether they buy better ones is the question. */}
+          {agg.paid.posts > 0 && (
+            <div>
+              <h2 className={`${UPLABEL} mb-3`} style={{ color: 'var(--ds-muted)' }}>Paid vs Organic</h2>
+              <div className="rounded-lg overflow-hidden" style={CARD}>
+                <table className="w-full text-left font-mono text-xs">
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--ds-border)' }}>
+                      <th className="px-4 py-3 font-normal" style={{ color: C.dim }}>Type</th>
+                      <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Posts</th>
+                      <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Applicants</th>
+                      <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Apply %</th>
+                      <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Relevance %</th>
+                      <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Burden</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {([{ label: 'Paid / promoted', s: agg.paid }, { label: 'Organic', s: agg.organic }]).map(({ label, s }, i) => {
+                      const rel = s.relevantMeasuredApps ? pct(s.relevant, s.relevantMeasuredApps) : null
+                      return (
+                        <tr key={label} style={{ borderBottom: i === 0 ? '1px solid var(--ds-border)' : 'none' }}>
+                          <td className="px-4 py-2.5" style={{ color: 'var(--ds-text)' }}>{label}</td>
+                          <td className="px-4 py-2.5 text-right" style={{ color: 'var(--ds-text)' }}>{s.posts}</td>
+                          <td className="px-4 py-2.5 text-right" style={{ color: 'var(--ds-text)' }}>{s.applicants.toLocaleString()}</td>
+                          <td className="px-4 py-2.5 text-right" style={{ color: 'var(--ds-muted)' }}>{s.views ? f1(pct(s.applicants, s.views)) + '%' : '—'}</td>
+                          <td className="px-4 py-2.5 text-right font-medium" style={{ color: rel != null ? rateColor(rel) : C.dim }}>
+                            {rel != null ? f1(rel) + '%' : '—'}
+                          </td>
+                          <td className="px-4 py-2.5 text-right" style={{ color: 'var(--ds-text)' }}>
+                            {s.relevant ? f1(s.relevantMeasuredApps / s.relevant) : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="font-mono text-[10.5px] mt-2 leading-relaxed" style={{ color: C.dim }}>
+                Relevance is measured only on posts where it was recorded ({agg.paid.postsWithRel} paid,{' '}
+                {agg.organic.postsWithRel}{' '}organic) — treat the paid figure as directional at this sample size.
+                &ldquo;Burden&rdquo; is applicants read per relevant candidate; lower is better.
+              </p>
+            </div>
+          )}
+
+          {/* Where inbound candidates actually end up — extends the funnel past "relevant" using
+              Ashby outcomes. Channel-level only: the postings tracker and Ashby share no key, so a
+              specific post can't be tied to a specific hire. */}
+          <SourceOutcomes />
 
           {/* By Keyword section */}
           <div>
@@ -996,6 +1120,80 @@ function PostingForm({ initial, onClose, onSaved }: {
           <button onClick={save} disabled={saving || !f.date_posted} className="font-mono text-xs px-3 py-1.5 rounded-lg" style={{ background: 'var(--ds-green)', color: '#fff', border: '1px solid var(--ds-green)', opacity: !f.date_posted ? 0.5 : 1, cursor: saving ? 'wait' : !f.date_posted ? 'not-allowed' : 'pointer' }}>{saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Source → outcome (from the Ashby cache) ────────────────────────────────────
+// The postings tracker stops at "relevant". Ashby knows who actually got hired and which channel
+// each application arrived through, so this closes the loop — at channel level, since the two
+// systems share no join key.
+
+interface SourceOutcome {
+  source: string
+  applications: number
+  advanced: number
+  hired: number
+  hireRate: number
+}
+
+// Local copies of the styles the main component keeps as function-scoped consts.
+const SO_UPLABEL = 'font-mono text-[11px] uppercase tracking-wider block'
+const SO_CARD = { backgroundColor: 'var(--ds-surface)', border: '1px solid var(--ds-border)', borderRadius: 10 } as const
+
+function SourceOutcomes() {
+  const { data } = useSWR<{ configured: boolean; sources: SourceOutcome[]; dataStart: string | null }>(
+    '/api/ashby/sources', jsonFetcher, { refreshInterval: 300_000 }
+  )
+  if (!data?.configured || !data.sources?.length) return null
+
+  // Trim the long tail of one-off sources — they add rows without adding signal.
+  const MIN_APPS = 5
+  const rows = data.sources.filter(s => s.applications >= MIN_APPS)
+  const hidden = data.sources.length - rows.length
+  const maxApps = Math.max(...rows.map(s => s.applications), 1)
+  const start = data.dataStart
+    ? new Date(data.dataStart).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+    : null
+
+  return (
+    <div>
+      <h2 className={`${SO_UPLABEL} mb-3`} style={{ color: 'var(--ds-muted)' }}>Where Applicants End Up (by channel)</h2>
+      <div className="rounded-lg overflow-hidden" style={SO_CARD}>
+        <table className="w-full text-left font-mono text-xs">
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--ds-border)' }}>
+              <th className="px-4 py-3 font-normal" style={{ color: C.dim }}>Channel</th>
+              <th className="px-4 py-3 font-normal" style={{ color: C.dim }}>Volume</th>
+              <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Applications</th>
+              <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Past screen</th>
+              <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Hired</th>
+              <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Hire %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((s, i) => (
+              <tr key={s.source} style={{ borderBottom: i < rows.length - 1 ? '1px solid var(--ds-border)' : 'none' }}>
+                <td className="px-4 py-2.5 whitespace-nowrap" style={{ color: 'var(--ds-text)' }}>{s.source}</td>
+                <td className="px-4 py-2.5" style={{ minWidth: 90 }}>
+                  <div className="h-1.5 rounded" style={{ width: `${(s.applications / maxApps) * 100}%`, background: C.blue, opacity: 0.7 }} />
+                </td>
+                <td className="px-4 py-2.5 text-right" style={{ color: 'var(--ds-text)' }}>{s.applications.toLocaleString()}</td>
+                <td className="px-4 py-2.5 text-right" style={{ color: 'var(--ds-muted)' }}>{s.advanced.toLocaleString()}</td>
+                <td className="px-4 py-2.5 text-right" style={{ color: 'var(--ds-text)' }}>{s.hired}</td>
+                <td className="px-4 py-2.5 text-right font-medium" style={{ color: s.hireRate >= 5 ? C.greenL : s.hireRate >= 1 ? C.amber : '#f87171' }}>
+                  {f1(s.hireRate)}%
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="font-mono text-[10.5px] mt-2 leading-relaxed" style={{ color: C.dim }}>
+        From Ashby{start ? `, which has application history from ${start} onward` : ''} — so this covers a shorter
+        window than the posting history above. Channel-level attribution: an individual post can&rsquo;t be tied to a
+        specific hire.{hidden > 0 ? ` ${hidden} channel${hidden === 1 ? '' : 's'} with under ${MIN_APPS} applications hidden.` : ''}
+      </p>
     </div>
   )
 }
