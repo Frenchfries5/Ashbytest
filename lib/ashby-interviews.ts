@@ -57,19 +57,48 @@ async function loadFunnel(weekCount: number): Promise<{ weeks: FunnelWeek[]; int
   const currentMonday = weekStartUTC(Date.now())
   const windowStart = currentMonday - (weekCount - 1) * 7 * DAY
 
-  const { data, error } = await supabase
-    .from('ashby_interviews')
-    .select('application_id, candidate_id, stage_title, start_time, raw')
-  if (error) return null // table/column missing → unavailable
-  const rows = (data ?? []) as EventRow[]
+  // Supabase caps a select at 1000 rows, and both tables are larger than that — page explicitly or
+  // the tail silently goes missing (which is exactly what made recent "moved forward" read zero).
+  async function selectAll<T>(table: string, columns: string): Promise<T[] | null> {
+    const out: T[] = []
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase.from(table).select(columns).range(from, from + 999)
+      if (error) return null
+      const rows = (data ?? []) as unknown as T[]
+      out.push(...rows)
+      if (rows.length < 1000) break
+    }
+    return out
+  }
 
-  // A person "moved forward" if they have ANY completed interview at a real round past the screen
-  // (stage not in EARLY), in any of their applications. Event-based, so it survives later
-  // archiving and works across pipelines.
+  const [eventRows, appRows] = await Promise.all([
+    selectAll<EventRow>('ashby_interviews', 'application_id, candidate_id, stage_title, start_time, raw'),
+    selectAll<{ candidate_id: string | null; status: string | null; stage_title: string | null }>(
+      'ashby_applications', 'candidate_id, status, stage_title'
+    ),
+  ])
+  if (!eventRows) return null // table/column missing → unavailable
+  const rows = eventRows
+  const appData = appRows ?? []
+
+  // A person "moved forward" if EITHER signal holds:
+  //
+  //  1. they have a completed interview at a real round past the screen (stage not in EARLY).
+  //     Event-based, so it survives later archiving and works across pipelines; this carries the
+  //     history.
+  //  2. they currently sit on a live (non-archived) application at a stage past the screen.
+  //     Needed for recency: the common path is a screen → moved onto a real req at, say, Hiring
+  //     Manager Screen, where the next interview hasn't happened yet. Signal 1 alone reported those
+  //     people as not advanced, which made the most recent week read 0 even when people had moved.
+  //     Archived rows are skipped because their stage decays to "Archived" and would be meaningless.
   const advancedPeople = new Set<string>()
   for (const r of rows) {
     const p = personKey(r)
     if (p && r.stage_title && !EARLY.test(r.stage_title)) advancedPeople.add(p)
+  }
+  for (const a of appData) {
+    if (!a.candidate_id || a.status === 'Archived') continue
+    if (a.status === 'Hired' || (a.stage_title && !EARLY.test(a.stage_title))) advancedPeople.add(a.candidate_id)
   }
 
   const allByWeek = new Map<number, Set<string>>()                 // week → set of screened people

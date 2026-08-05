@@ -132,9 +132,11 @@ export function InterviewsDashboard() {
 
       <p className="font-mono text-[11px] leading-relaxed" style={{ color: C.dim }}>
         Screens = completed Recruiter Screen and General Interest introduction-call interviews.
-        &ldquo;Moved forward&rdquo; counts screened candidates who later reached a real interview round past
-        the screen, tracked per candidate across all their applications (so a General Interest candidate
-        who moves to a real req still counts). The current week is partial.
+        &ldquo;Moved forward&rdquo; counts screened candidates who either completed a later interview round or
+        currently sit on a live application at a stage past the screen — tracked per candidate across all
+        their applications, so someone moved from General Interest onto a real req counts as soon as they
+        land there, not only once their next interview happens. Recent weeks still climb as candidates
+        progress, and the current week is partial.
       </p>
     </div>
   )
