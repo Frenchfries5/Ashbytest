@@ -414,7 +414,9 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
   const { data: ashbyFunnel } = useSWR<{
     configured: boolean
     dataStart: string | null
-    monthly: { month: string; applications: number; screened: number; advanced: number; hired: number }[]
+    daysToScreen: number | null
+    daysToScreenSample: number
+    monthly: { month: string; applications: number; screened: number; advanced: number; hired: number; daysToScreen: number | null }[]
   }>(`/api/ashby/inbound-funnel?role=${encodeURIComponent(roleFilter)}`, jsonFetcher, { refreshInterval: 300_000 })
   const [detailPoster, setDetailPoster] = useState('all')
   const [sortKey, setSortKey] = useState<SortKey>('date')
@@ -675,9 +677,12 @@ export function InboundDashboard({ admin = false }: { admin?: boolean }) {
               { label: 'Relevance Rate', value: agg.relevantMeasuredApps ? f1(pct(agg.totalRelevant, agg.relevantMeasuredApps)) + '%' : '—',
                 sub: 'relevant / applicants',
                 spark: agg.monthly.map(m => pct(m.relevant, m.relevantMeasuredApps)), color: C.green },
-              { label: 'Screening Burden', value: agg.totalRelevant ? f1(agg.relevantMeasuredApps / agg.totalRelevant) : '—',
-                sub: 'applicants read per relevant one',
-                spark: agg.monthly.map(m => (m.relevant ? m.relevantMeasuredApps / m.relevant : 0)), color: C.amber },
+              // Speed, deliberately: screening burden used to sit here, but applicants-per-relevant
+              // is just the reciprocal of relevance rate next to it — two tiles, one fact. Time to
+              // first screen is the one dimension nothing else on the dashboard measures.
+              { label: 'Days to First Screen', value: ashbyFunnel?.daysToScreen != null ? f1(ashbyFunnel.daysToScreen) : '—',
+                sub: `median${ashbyFunnel?.daysToScreenSample ? ` of ${ashbyFunnel.daysToScreenSample} applications` : ''}`,
+                spark: (ashbyFunnel?.monthly ?? []).map(m => m.daysToScreen ?? 0), color: C.amber },
               { label: 'Posts Published', value: agg.totalPosts.toLocaleString(),
                 sub: `${f1(agg.avgDuration)} avg days live`,
                 spark: agg.monthly.map(m => m.posts), color: C.blue },

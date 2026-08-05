@@ -36,6 +36,13 @@ function reqMatcher(role: string | null): RegExp {
 // Screening/pre-interview stages — an event at any other stage means they got past the screen.
 const EARLY_STAGE = /new lead|reached out|replied|application review|holding tank|recruiter screen|introduction call|sourced/i
 
+function median(xs: number[]): number | null {
+  if (!xs.length) return null
+  const s = [...xs].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2
+}
+
 export interface FunnelStep {
   applications: number
   screened: number   // sat through at least one interview of any kind
@@ -69,10 +76,11 @@ export async function GET(req: NextRequest) {
     // Interview events for in-scope applications (paged — the table can exceed one select).
     const screenedIds = new Set<string>()
     const advancedIds = new Set<string>()
+    const firstInterviewAt = new Map<string, number>() // application id → earliest interview start
     for (let from = 0; ; from += 1000) {
       const { data, error } = await supabase
         .from('ashby_interviews')
-        .select('application_id, stage_title')
+        .select('application_id, stage_title, start_time')
         .range(from, from + 999)
       if (error) break
       const rows = data ?? []
@@ -82,6 +90,11 @@ export async function GET(req: NextRequest) {
         screenedIds.add(appId)
         const stage = e.stage_title as string | null
         if (stage && !EARLY_STAGE.test(stage)) advancedIds.add(appId)
+        const t = e.start_time ? Date.parse(e.start_time as string) : NaN
+        if (!isNaN(t)) {
+          const prev = firstInterviewAt.get(appId)
+          if (prev === undefined || t < prev) firstInterviewAt.set(appId, t)
+        }
       }
       if (rows.length < 1000) break
     }
@@ -90,6 +103,11 @@ export async function GET(req: NextRequest) {
     let hired = 0
     const months = new Map<string, { month: string } & FunnelStep>()
     const channels = new Map<string, { channel: string } & FunnelStep>()
+    // Days from application to first interview — how fast inbound actually gets a response.
+    // Collected as raw samples so the reported figure can be a median (a couple of stale
+    // applications screened months later would drag a mean badly).
+    const screenLagAll: number[] = []
+    const screenLagByMonth = new Map<string, number[]>()
 
     for (const a of inScope) {
       const isHired = a.status === 'Hired'
@@ -106,6 +124,19 @@ export async function GET(req: NextRequest) {
         if (isAdvanced) m.advanced += 1
         if (isHired) m.hired += 1
         months.set(key, m)
+
+        const first = firstInterviewAt.get(a.id)
+        if (first !== undefined) {
+          const days = (first - Date.parse(a.created_at)) / 86_400_000
+          // Drop negatives (interview logged before the application record) and >180d outliers,
+          // which are re-engaged old applicants rather than inbound response time.
+          if (days >= 0 && days <= 180) {
+            screenLagAll.push(days)
+            const arr = screenLagByMonth.get(key) ?? []
+            arr.push(days)
+            screenLagByMonth.set(key, arr)
+          }
+        }
       }
 
       const ck = a.source ?? 'Unknown'
@@ -127,7 +158,11 @@ export async function GET(req: NextRequest) {
         hired,
         dataStart,
         reqs: reqs.map((r) => r.title),
-        monthly: [...months.values()].sort((a, b) => a.month.localeCompare(b.month)),
+        daysToScreen: median(screenLagAll),
+        daysToScreenSample: screenLagAll.length,
+        monthly: [...months.values()]
+          .sort((a, b) => a.month.localeCompare(b.month))
+          .map((m) => ({ ...m, daysToScreen: median(screenLagByMonth.get(m.month) ?? []) })),
         channels: [...channels.values()].sort((a, b) => b.applications - a.applications),
       },
       { headers: { 'Cache-Control': 'no-store' } }
