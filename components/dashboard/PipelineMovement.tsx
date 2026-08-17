@@ -12,7 +12,7 @@ import useSWR from 'swr'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
-interface Rating { latest: number | null; count: number }
+interface Rating { latest: number | null; previous: number | null; count: number }
 interface Digest {
   configured: boolean
   reqs: string[]
@@ -35,12 +35,16 @@ const RATING_LABEL: Record<string, string> = { '4': 'Strong yes', '3': 'Yes', '2
 // 4/3 are advance signals, 2/1 are not — colour them so a low-scoring advance stands out.
 const ratingColor = (n: number) => (n >= 4 ? C.green : n === 3 ? C.blue : n === 2 ? C.amber : '#f87171')
 
-function RatingCell({ rating }: { rating: { latest: number | null; count: number } }) {
+// Multiple scorecards show as "3 → 4 Strong yes": the score being superseded, then the current one,
+// so a candidate whose read improved (or dropped) between rounds is visible without opening Ashby.
+function RatingCell({ rating }: { rating: Rating }) {
   if (rating?.latest == null) return <span style={{ color: C.dim }}>—</span>
   return (
     <span style={{ color: ratingColor(rating.latest) }}>
+      {rating.previous != null && (
+        <span style={{ color: ratingColor(rating.previous) }}>{rating.previous} <span style={{ color: C.dim }}>→</span> </span>
+      )}
       {rating.latest} <span style={{ color: C.dim }}>{RATING_LABEL[String(rating.latest)]}</span>
-      {rating.count > 1 && <span style={{ color: C.dim }}> ·{rating.count}</span>}
     </span>
   )
 }
@@ -167,7 +171,10 @@ export function PipelineMovement({ role = 'growth' }: { role?: string }) {
                 {i > 0 && <span style={{ color: C.dim }}> · </span>}
                 {s.name}{' '}
                 {s.rating?.latest != null && (
-                  <span style={{ color: ratingColor(s.rating.latest) }}>{s.rating.latest} </span>
+                  <span style={{ color: ratingColor(s.rating.latest) }}>
+                    {s.rating.previous != null && <span style={{ color: C.dim }}>{s.rating.previous}→</span>}
+                    {s.rating.latest}{' '}
+                  </span>
                 )}
                 <span style={{ color: C.dim }}>{day(s.at)}</span>
               </span>
