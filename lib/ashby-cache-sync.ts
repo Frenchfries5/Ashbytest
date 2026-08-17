@@ -26,6 +26,7 @@ export interface CacheSyncSummary {
   mode: CacheSyncMode
   jobs: number
   applications: number
+  feedback: number
   pages: number
   usedSyncToken: boolean
   tokenRejected: boolean
@@ -174,6 +175,42 @@ async function syncJobs(token: string | null): Promise<{ count: number; token: s
   return { count: rows.length, token: freshToken }
 }
 
+interface RawFeedback {
+  id: string
+  applicationId?: string
+  submittedAt?: string
+  submittedValues?: Record<string, unknown>
+  submittedByUser?: { firstName?: string; lastName?: string }
+  [k: string]: unknown
+}
+
+// Submitted scorecards. Only ~7 pages, and there's no syncToken on this endpoint, so a full pull
+// each sync is simplest and always correct.
+async function syncFeedback(): Promise<number> {
+  const rows = await ashbyPaginate<RawFeedback>('applicationFeedback.list', { limit: 100 })
+  const mapped = rows
+    .filter((f) => f?.id)
+    .map((f) => {
+      const raw = f.submittedValues?.overall_recommendation
+      const n = typeof raw === 'string' || typeof raw === 'number' ? Number(raw) : NaN
+      return {
+        id: f.id,
+        application_id: str(f.applicationId),
+        // Ashby's 1-4 overall recommendation (4 = Strong Yes). Anything else stays null.
+        overall_recommendation: Number.isFinite(n) && n >= 1 && n <= 4 ? n : null,
+        submitted_at: iso(f.submittedAt),
+        submitted_by: str([f.submittedByUser?.firstName, f.submittedByUser?.lastName].filter(Boolean).join(' ')),
+        raw: f,
+      }
+    })
+  if (!mapped.length) return 0
+  for (const c of chunk(mapped, 500)) {
+    const { error } = await supabase.from('ashby_feedback').upsert(c, { onConflict: 'id' })
+    if (error) throw new Error(`ashby_feedback upsert failed: ${error.message}`)
+  }
+  return mapped.length
+}
+
 async function readTokens(): Promise<{ app: string | null; job: string | null }> {
   const { data, error } = await supabase
     .from('site_state')
@@ -235,6 +272,13 @@ export async function syncAshbyCache(mode: CacheSyncMode): Promise<CacheSyncSumm
 
   const jobs = await retryOnBadToken(tokens.job, syncJobs)
   const apps = await retryOnBadToken(tokens.app, syncApplications)
+  // Best-effort: a missing ashby_feedback table must not fail the whole sync.
+  let feedback = 0
+  try {
+    feedback = await syncFeedback()
+  } catch {
+    feedback = 0
+  }
 
   const syncedAt = new Date().toISOString()
   const patch: Record<string, unknown> = { ashby_synced_at: syncedAt }
@@ -247,6 +291,7 @@ export async function syncAshbyCache(mode: CacheSyncMode): Promise<CacheSyncSumm
     mode,
     jobs: jobs.count,
     applications: apps.count,
+    feedback,
     pages: apps.pages,
     usedSyncToken: !!tokens.app && !tokenRejected,
     tokenRejected,

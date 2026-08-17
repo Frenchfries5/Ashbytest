@@ -6,6 +6,7 @@ import { getWeeklySourcing } from '@/lib/sourcing'
 import { getAshbyWeeklyRows } from '@/lib/ashby-weekly'
 import { getWeeklyHireCounts } from '@/lib/ashby-hires'
 import { getRecruiterScreenFunnel } from '@/lib/ashby-interviews'
+import { getWeeklyDigest } from '@/lib/ashby-digest'
 import { getPipelineOutcomes } from '@/lib/ashby-pipeline'
 import {
   parseAshbyWeeks, computeOutboundScorecard, computeInboundScorecard,
@@ -46,13 +47,14 @@ const MEGAN = 'Megan Kidd'
 
 // Gather the same data the Executive Summary tab shows and render the email HTML. No sending,
 // no recipients, no mail send — used by both the send path and the ?preview branch.
-async function buildEmail() {
-  const [weeks, ashbyRes, hireRes, pipelineOutcomes, funnel, settings] = await Promise.all([
+async function buildEmail(week: 'current' | 'last' = 'current') {
+  const [weeks, ashbyRes, hireRes, pipelineOutcomes, funnel, digest, settings] = await Promise.all([
     getWeeklySourcing(),
     getAshbyWeeklyRows(),
     getWeeklyHireCounts(),
     getPipelineOutcomes(),
     getRecruiterScreenFunnel(12),
+    getWeeklyDigest({ week }),
     supabase.from('site_state').select('email_feedback_prompt').eq('id', 1).maybeSingle(),
   ])
 
@@ -79,6 +81,7 @@ async function buildEmail() {
     screens: { value: lastC.screens, prev: prevC ? prevC.screens : null },
     movedForward: { value: lastC.movedForward, prev: prevC ? prevC.movedForward : null },
     hires,
+    digest: digest.configured ? digest : null,
   })
 }
 
@@ -124,7 +127,10 @@ export async function GET(req: NextRequest) {
       if (!isAdminRequest(req) && !authorized(req)) {
         return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
       }
-      const { html } = await buildEmail()
+      // ?week=last previews the previous week, which is useful early in a week when the
+      // current one has no activity yet.
+      const week = req.nextUrl.searchParams.get('week') === 'last' ? 'last' : 'current'
+      const { html } = await buildEmail(week)
       return new NextResponse(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } })
     }
     if (!authorized(req)) {

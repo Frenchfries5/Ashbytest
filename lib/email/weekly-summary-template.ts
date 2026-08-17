@@ -7,6 +7,16 @@
 
 import type { OutboundScorecard, HiresScorecard } from '@/lib/executive-summary'
 
+// Named pipeline activity for the week — the part a weekly read actually wants: who moved, to
+// what stage, when, and how they scored. Aggregate rates live on the dashboard.
+export interface WeeklyDigest {
+  reqs: string[]
+  newApplications: number
+  screened: { name: string; at: string }[]
+  movements: { name: string; stage: string; at: string }[]
+  ratings: { average: number | null; count: number; distribution: Record<string, number> }
+}
+
 export interface WeeklySummaryData {
   headline: string
   weekEnding: string // human label, e.g. "Jul 18, 2026"
@@ -18,6 +28,7 @@ export interface WeeklySummaryData {
   screens: { value: number; prev: number | null }
   movedForward: { value: number; prev: number | null }
   hires: HiresScorecard
+  digest: WeeklyDigest | null
 }
 
 // Light palette. HTML email dark themes render inconsistently — Outlook in particular applies
@@ -68,18 +79,97 @@ function tileGrid(tiles: TileData[]): string {
 }
 
 export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: string; html: string } {
-  const { outbound: o, hires: h, growthPipeline, screens, movedForward, siteUrl, feedbackPrompt } = data
+  const { outbound: o, hires: h, growthPipeline, siteUrl, feedbackPrompt, digest } = data
 
-  // Same blocks as the Executive Summary hero strip, same order:
-  // Invites, Replies, In growth pipeline / Recruiter screens, Moved forward, Hires this week.
-  const tiles: TileData[] = [
-    { label: 'Invites', value: num(o.invites), sub: deltaSub(o.invites, o.invitesPrev) },
-    { label: 'Replies', value: num(o.replies), sub: deltaSub(o.replies, o.repliesPrev) },
-    ...(growthPipeline !== null ? [{ label: 'In growth pipeline', value: num(growthPipeline), sub: 'active candidates, Growth role' }] : []),
-    { label: 'Recruiter screens', value: num(screens.value), sub: deltaSub(screens.value, screens.prev) },
-    { label: 'Moved forward', value: num(movedForward.value), sub: deltaSub(movedForward.value, movedForward.prev) },
-    { label: 'Hires this week', value: num(h.thisWeek), sub: deltaSub(h.thisWeek, h.lastWeek) },
-  ]
+  const RATING_LABEL: Record<string, string> = { '4': 'Strong yes', '3': 'Yes', '2': 'No', '1': 'Strong no' }
+  const day = (isoStr: string) =>
+    new Date(isoStr).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
+
+  // The week's activity, named. This is the part a Friday read is actually for.
+  const d = digest
+  const tiles: TileData[] = d
+    ? [
+        { label: 'New applications', value: num(d.newApplications), sub: 'this week' },
+        { label: 'Screened', value: num(d.screened.length), sub: 'this week' },
+        { label: 'Moved forward', value: num(d.movements.length), sub: 'to a later round' },
+        {
+          label: 'Avg rating',
+          value: d.ratings.average != null ? d.ratings.average.toFixed(1) : '—',
+          sub: d.ratings.count
+            ? `${d.ratings.count} scorecard${d.ratings.count === 1 ? '' : 's'} · 4 = strong yes`
+            : 'no scorecards submitted',
+        },
+      ]
+    : [
+        { label: 'Invites', value: num(o.invites), sub: deltaSub(o.invites, o.invitesPrev) },
+        { label: 'Replies', value: num(o.replies), sub: deltaSub(o.replies, o.repliesPrev) },
+        ...(growthPipeline !== null ? [{ label: 'In growth pipeline', value: num(growthPipeline), sub: 'active candidates' }] : []),
+        { label: 'Hires this week', value: num(h.thisWeek), sub: deltaSub(h.thisWeek, h.lastWeek) },
+      ]
+
+  // Who moved, to what stage, when.
+  const movementRows = (d?.movements ?? [])
+    .map(
+      (m) => `<tr>
+        <td style="padding:8px 10px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:${COL.text};border-top:1px solid ${COL.border};">${esc(m.name)}</td>
+        <td style="padding:8px 10px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:${COL.text};border-top:1px solid ${COL.border};">${esc(m.stage)}</td>
+        <td style="padding:8px 10px;font-family:monospace;font-size:12px;color:${COL.muted};border-top:1px solid ${COL.border};white-space:nowrap;">${esc(day(m.at))}</td>
+      </tr>`
+    )
+    .join('')
+
+  const movementSection = d
+    ? `<tr><td style="padding:20px 18px 0;">
+        <div style="font-family:monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:${COL.dim};margin-bottom:8px;">Moved forward this week</div>
+        ${
+          movementRows
+            ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${COL.surface};border:1px solid ${COL.border};border-radius:10px;">
+                <tr>
+                  <th align="left" style="padding:8px 10px;font-family:monospace;font-size:10.5px;text-transform:uppercase;color:${COL.dim};font-weight:normal;">Candidate</th>
+                  <th align="left" style="padding:8px 10px;font-family:monospace;font-size:10.5px;text-transform:uppercase;color:${COL.dim};font-weight:normal;">Advanced to</th>
+                  <th align="left" style="padding:8px 10px;font-family:monospace;font-size:10.5px;text-transform:uppercase;color:${COL.dim};font-weight:normal;">When</th>
+                </tr>
+                ${movementRows}
+              </table>`
+            : `<div style="background:${COL.surface};border:1px solid ${COL.border};border-radius:10px;padding:12px 14px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:${COL.muted};">No one advanced to a later round this week.</div>`
+        }
+      </td></tr>`
+    : ''
+
+  const screenedSection =
+    d && d.screened.length
+      ? `<tr><td style="padding:16px 18px 0;">
+          <div style="font-family:monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:${COL.dim};margin-bottom:8px;">Screened this week</div>
+          <div style="background:${COL.surface};border:1px solid ${COL.border};border-radius:10px;padding:12px 14px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.6;color:${COL.text};">
+            ${d.screened.map((s) => `${esc(s.name)} <span style="color:${COL.dim};font-family:monospace;font-size:11.5px;">${esc(day(s.at))}</span>`).join(' &nbsp;·&nbsp; ')}
+          </div>
+        </td></tr>`
+      : ''
+
+  // Rating mix, only when scorecards exist — an empty bar chart says nothing.
+  const ratingSection =
+    d && d.ratings.count
+      ? `<tr><td style="padding:16px 18px 0;">
+          <div style="font-family:monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:${COL.dim};margin-bottom:8px;">Scorecards this week</div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${COL.surface};border:1px solid ${COL.border};border-radius:10px;">
+            <tr><td style="padding:12px 14px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:${COL.text};">
+              ${['4', '3', '2', '1']
+                .filter((k) => (d.ratings.distribution[k] ?? 0) > 0)
+                .map((k) => `${esc(RATING_LABEL[k])}: <strong>${d.ratings.distribution[k]}</strong>`)
+                .join(' &nbsp;·&nbsp; ')}
+            </td></tr>
+          </table>
+        </td></tr>`
+      : ''
+
+  // Outbound context, demoted to one line now that the week's pipeline activity leads.
+  const contextLine = d
+    ? `<tr><td style="padding:16px 18px 0;font-family:monospace;font-size:11.5px;color:${COL.muted};">
+        Also this week — outbound: ${num(o.invites)} invites, ${num(o.replies)} replies · hires: ${num(h.thisWeek)}${
+        growthPipeline !== null ? ` · ${num(growthPipeline)} active in the Growth pipeline` : ''
+      }
+      </td></tr>`
+    : ''
 
   const feedback = feedbackPrompt
     ? `<tr><td style="padding:14px 18px 0;">
@@ -120,12 +210,21 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
           </table>
         </td></tr>
 
-        <tr><td style="padding:14px 12px 0;">${tileGrid(tiles)}</td></tr>
+        ${d ? `<tr><td style="padding:18px 18px 0;font-family:monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:${COL.dim};">This week on ${esc(d.reqs[0] ?? 'the pipeline')}</td></tr>` : ''}
+
+        <tr><td style="padding:10px 12px 0;">${tileGrid(tiles)}</td></tr>
+
+        ${movementSection}
+        ${screenedSection}
+        ${ratingSection}
+        ${contextLine}
 
         ${cta}
 
         <tr><td style="padding:22px 18px;font-family:monospace;font-size:11px;color:${COL.dim};line-height:1.5;">
-          Automated weekly summary from the Coverdash recruiting dashboard. Recruiter screens and moved-forward are Megan's, last completed week; the full trend, rates, and pipeline detail live in the dashboard${siteUrl ? ` (<a href="${esc(siteUrl)}" style="color:${COL.muted};">${esc(siteUrl.replace(/^https?:\/\//, ''))}</a>)` : ''}.
+          Automated weekly summary from the Coverdash recruiting dashboard.
+          ${d ? `&ldquo;Moved forward&rdquo; means a completed interview at a stage past the screen, so it reflects rounds that actually happened rather than stage labels. Ratings are Ashby&rsquo;s overall recommendation, where 4 is a strong yes. ` : ''}
+          Full trends, rates and pipeline detail live in the dashboard${siteUrl ? ` (<a href="${esc(siteUrl)}" style="color:${COL.muted};">${esc(siteUrl.replace(/^https?:\/\//, ''))}</a>)` : ''}.
         </td></tr>
       </table>
     </td></tr>

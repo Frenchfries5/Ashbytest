@@ -52,6 +52,23 @@ create index if not exists ashby_applications_created_idx on ashby_applications 
 create index if not exists ashby_applications_updated_idx on ashby_applications (updated_at);
 create index if not exists ashby_applications_candidate_idx on ashby_applications (candidate_id);
 
+-- ── ashby_feedback ──────────────────────────────────────────────────────────────
+-- Submitted interview scorecards. `overall_recommendation` is Ashby's 1-4 scale where
+-- 4 = Strong Yes, 3 = Yes, 2 = No, 1 = Strong No — so HIGHER IS BETTER. Backs the weekly
+-- "average rating of people screened this week" figure in the Friday email.
+create table if not exists ashby_feedback (
+  id                     text primary key,
+  application_id         text,
+  overall_recommendation int,          -- 1-4, higher is better; null when the form omitted it
+  submitted_at           timestamptz,
+  submitted_by           text,
+  raw                    jsonb not null,
+  synced_at              timestamptz not null default now()
+);
+
+create index if not exists ashby_feedback_app_idx on ashby_feedback (application_id);
+create index if not exists ashby_feedback_submitted_idx on ashby_feedback (submitted_at);
+
 -- ── sync bookkeeping ────────────────────────────────────────────────────────────
 -- Reuses the single-row site_state table (created in meetalfred.sql). The tokens are Ashby's
 -- incremental cursors; ashby_synced_at drives the "last synced" label and the on-load
