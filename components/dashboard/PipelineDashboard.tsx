@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import useSWR, { mutate as globalMutate } from 'swr'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
+import { ScorecardAnalytics } from './ScorecardAnalytics'
 
 // ── design tokens (match AshbyDashboard) ─────────────────────────────────────────
 const C = {
@@ -486,9 +487,12 @@ type SortKey = 'title' | 'total' | 'relevant' | 'newThisWeek' | 'daysOpen' | 'id
 
 // ── main ────────────────────────────────────────────────────────────────────────────
 export function PipelineDashboard() {
-  const [view, setView] = useState<'open' | 'closed'>('open')
+  // 'scorecards' asks a different question from the role funnel, so it swaps the whole body
+  // rather than filtering the same table.
+  const [view, setView] = useState<'open' | 'closed' | 'scorecards'>('open')
+  const scorecards = view === 'scorecards'
   const swrKey = `/api/ashby/pipeline${view === 'closed' ? '?status=closed' : ''}`
-  const { data, isLoading, error } = useSWR<PipelineResponse>(swrKey, fetcher, { refreshInterval: 300_000 })
+  const { data, isLoading, error } = useSWR<PipelineResponse>(scorecards ? null : swrKey, fetcher, { refreshInterval: 300_000 })
   const [refreshing, setRefreshing] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('total')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -530,13 +534,13 @@ export function PipelineDashboard() {
     <span className="opacity-50 text-[9px] ml-0.5">{sortKey === k ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
   )
 
-  if (isLoading) return (
+  if (isLoading && !scorecards) return (
     <div className="flex items-center justify-center h-64 font-mono text-sm" style={{ color: C.muted }}>
       Loading pipeline…
     </div>
   )
-  if (data && data.configured === false) return <NotConfigured />
-  if (error || data?.error) return (
+  if (!scorecards && data && data.configured === false) return <NotConfigured />
+  if (!scorecards && (error || data?.error)) return (
     <div className="flex flex-col items-center justify-center h-64 gap-2 font-mono text-sm" style={{ color: C.red }}>
       <span>Failed to load pipeline.</span>
       {data?.error && <span className="text-xs" style={{ color: C.dim }}>{data.error}</span>}
@@ -550,7 +554,9 @@ export function PipelineDashboard() {
         <div>
           <h2 className="text-2xl font-medium" style={{ color: C.text }}>Pipeline</h2>
           <p className="mt-1 font-mono text-sm" style={{ color: C.muted }}>
-            {closed
+            {scorecards
+              ? 'Interview scorecards — what the ratings predict, and how they vary by stage and interviewer'
+              : closed
               ? `${roles.length} closed role${roles.length === 1 ? '' : 's'} — post-hoc source & rejection analysis`
               : `${roles.length} open role${roles.length === 1 ? '' : 's'} — live candidate stage funnel from Ashby`}
           </p>
@@ -558,7 +564,7 @@ export function PipelineDashboard() {
         <div className="flex items-center gap-2">
           {/* Open / Closed toggle */}
           <div className="flex gap-0 p-1 rounded-lg" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-            {(['open', 'closed'] as const).map((v) => (
+            {(['open', 'closed', 'scorecards'] as const).map((v) => (
               <button
                 key={v}
                 onClick={() => { setView(v); setSortKey('total'); setSortDir('desc'); setSelectedRoleId(null) }}
@@ -590,8 +596,10 @@ export function PipelineDashboard() {
         </div>
       </div>
 
+      {scorecards && <ScorecardAnalytics />}
+
       {/* KPI strip */}
-      {totals && (
+      {!scorecards && totals && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {(closed
             ? [
@@ -616,7 +624,7 @@ export function PipelineDashboard() {
       )}
 
       {/* Stage legend */}
-      {stageOrder.length > 0 && (
+      {!scorecards && stageOrder.length > 0 && (
         <div className="flex items-center gap-x-4 gap-y-2 flex-wrap font-mono text-[11px]" style={{ color: C.dim }}>
           {stageOrder.map((s) => (
             <span key={s} className="flex items-center gap-1.5">
@@ -628,7 +636,7 @@ export function PipelineDashboard() {
       )}
 
       {/* Role cards */}
-      {roles.length === 0 ? (
+      {scorecards ? null : roles.length === 0 ? (
         <div className="flex items-center justify-center h-40 font-mono text-sm rounded-lg" style={{ ...CARD, color: C.muted }}>
           {closed ? 'No closed roles found in Ashby.' : 'No open roles found in Ashby.'}
         </div>
