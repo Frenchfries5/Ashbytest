@@ -14,6 +14,7 @@ import {
 } from '@/lib/executive-summary'
 import type { WeeklyRow } from '@/lib/ashby-weekly'
 import type { WeeklyHireCount } from '@/lib/ashby-hires'
+import { PipelineMovement } from './PipelineMovement'
 
 // ── fetchers ─────────────────────────────────────────────────────────────────
 const jsonFetcher = (url: string) => fetch(url).then((r) => r.json())
@@ -260,6 +261,9 @@ export function ExecutiveSummary({ onJump }: { onJump?: (t: 'sourcing' | 'inboun
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+
+      {/* Named weekly activity — same view the Friday email sends, with a week picker. */}
+      <PipelineMovement />
 
       {onJump && (
         <div className="flex gap-2 flex-wrap pb-2">

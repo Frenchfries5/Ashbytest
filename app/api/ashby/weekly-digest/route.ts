@@ -8,8 +8,8 @@ export const dynamic = 'force-dynamic'
 export async function GET(req: NextRequest) {
   try {
     const role = req.nextUrl.searchParams.get('role') ?? undefined
-    const week = req.nextUrl.searchParams.get('week') === 'last' ? 'last' : 'current'
-    const digest = await getWeeklyDigest({ role, week })
+    const weeksAgo = Number(req.nextUrl.searchParams.get('weeksAgo') ?? 0)
+    const digest = await getWeeklyDigest({ role, weeksAgo: Number.isFinite(weeksAgo) ? weeksAgo : 0 })
     return NextResponse.json(digest, { headers: { 'Cache-Control': 'no-store' } })
   } catch (err) {
     return NextResponse.json(

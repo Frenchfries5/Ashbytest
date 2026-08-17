@@ -43,13 +43,15 @@ async function selectAll<T>(table: string, columns: string): Promise<T[]> {
   return out
 }
 
-export async function getWeeklyDigest(opts: { role?: string; week?: 'current' | 'last' } = {}): Promise<WeeklyDigest> {
+export async function getWeeklyDigest(opts: { role?: string; weeksAgo?: number } = {}): Promise<WeeklyDigest> {
   const role = (opts.role ?? 'growth').toLowerCase()
   const matcher = ROLE_REQ[role] ?? DEFAULT_REQ
 
-  // The Friday send reports the week it's closing out, so 'current' is the default.
+  // weeksAgo 0 = the current week (what the Friday send closes out), 1 = last week, and so on,
+  // which is what the dashboard's week picker walks back through.
   const thisMonday = weekStartUTC(Date.now())
-  const start = opts.week === 'last' ? thisMonday - 7 * DAY : thisMonday
+  const back = Math.max(0, Math.floor(opts.weeksAgo ?? 0))
+  const start = thisMonday - back * 7 * DAY
   const end = start + 7 * DAY
 
   const empty: WeeklyDigest = {

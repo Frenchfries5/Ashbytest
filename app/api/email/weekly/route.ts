@@ -54,7 +54,7 @@ async function buildEmail(week: 'current' | 'last' = 'current') {
     getWeeklyHireCounts(),
     getPipelineOutcomes(),
     getRecruiterScreenFunnel(12),
-    getWeeklyDigest({ week }),
+    getWeeklyDigest({ weeksAgo: week === 'last' ? 1 : 0 }),
     supabase.from('site_state').select('email_feedback_prompt').eq('id', 1).maybeSingle(),
   ])
 
