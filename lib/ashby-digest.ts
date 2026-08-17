@@ -28,6 +28,18 @@ export interface CandidateRating {
   count: number
 }
 
+// One row per candidate, not per interview: someone who cleared two rounds in the same week is one
+// person moving forward, so `stage`/`at` are the furthest point they reached and `earlier` carries
+// the rounds they passed through on the way.
+export interface Movement {
+  name: string
+  stage: string
+  at: string
+  earlier: { stage: string; at: string }[]
+  source: string | null
+  rating: CandidateRating
+}
+
 export interface WeeklyDigest {
   configured: boolean
   role: string
@@ -36,7 +48,7 @@ export interface WeeklyDigest {
   weekEnd: string
   newApplications: number
   screened: { name: string; at: string; rating: CandidateRating }[]
-  movements: { name: string; stage: string; at: string; source: string | null; rating: CandidateRating }[]
+  movements: Movement[]
   ratings: { average: number | null; count: number; distribution: Record<string, number> }
 }
 
@@ -112,7 +124,8 @@ export async function getWeeklyDigest(opts: { role?: string; weeksAgo?: number }
   const ratingOf = (appId: string): CandidateRating =>
     ratingByApp.get(appId) ?? { latest: null, history: [], count: 0 }
 
-  const movements: WeeklyDigest['movements'] = []
+  // Collected per application first, then folded into one row per candidate below.
+  const rounds = new Map<string, { name: string; source: string | null; stages: { stage: string; at: string }[] }>()
   const screened: WeeklyDigest['screened'] = []
   const seenMove = new Set<string>()
   for (const e of events) {
@@ -129,8 +142,22 @@ export async function getWeeklyDigest(opts: { role?: string; weeksAgo?: number }
       const k = `${e.application_id}|${e.stage_title}`
       if (seenMove.has(k)) continue
       seenMove.add(k)
-      movements.push({ name, stage: e.stage_title, at: new Date(t).toISOString(), source: a.source, rating: ratingOf(e.application_id) })
+      const entry = rounds.get(e.application_id) ?? { name, source: a.source, stages: [] }
+      entry.stages.push({ stage: e.stage_title, at: new Date(t).toISOString() })
+      rounds.set(e.application_id, entry)
     }
+  }
+
+  // Fold each candidate's rounds into a single row: the last one they reached is the headline,
+  // anything before it becomes the "after …" trail.
+  const movements: Movement[] = []
+  for (const [appId, r] of rounds) {
+    const stages = r.stages.slice().sort((x, y) => x.at.localeCompare(y.at))
+    const last = stages[stages.length - 1]
+    movements.push({
+      name: r.name, stage: last.stage, at: last.at,
+      earlier: stages.slice(0, -1), source: r.source, rating: ratingOf(appId),
+    })
   }
   movements.sort((x, y) => x.at.localeCompare(y.at))
   screened.sort((x, y) => x.at.localeCompare(y.at))

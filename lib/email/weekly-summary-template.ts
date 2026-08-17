@@ -15,7 +15,7 @@ export interface WeeklyDigest {
   reqs: string[]
   newApplications: number
   screened: { name: string; at: string; rating: RatingShape }[]
-  movements: { name: string; stage: string; at: string; rating: RatingShape }[]
+  movements: { name: string; stage: string; at: string; earlier: { stage: string; at: string }[]; rating: RatingShape }[]
   ratings: { average: number | null; count: number; distribution: Record<string, number> }
 }
 
@@ -109,7 +109,7 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
     ? [
         { label: 'New applications', value: num(d.newApplications), sub: 'this week' },
         { label: 'Screened', value: num(d.screened.length), sub: 'this week' },
-        { label: 'Moved forward', value: num(d.movements.length), sub: 'to a later round' },
+        { label: 'Moved forward', value: num(d.movements.length), sub: 'candidates, to a later round' },
         {
           label: 'Avg rating',
           value: d.ratings.average != null ? d.ratings.average.toFixed(1) : '—',
@@ -130,7 +130,7 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
     .map(
       (m) => `<tr>
         <td style="padding:8px 10px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:${COL.text};border-top:1px solid ${COL.border};">${esc(m.name)}</td>
-        <td style="padding:8px 10px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:${COL.text};border-top:1px solid ${COL.border};">${esc(m.stage)}</td>
+        <td style="padding:8px 10px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:${COL.text};border-top:1px solid ${COL.border};">${esc(m.stage)}${m.earlier?.length ? `<div style="font-family:monospace;font-size:10.5px;color:${COL.dim};margin-top:3px;">after ${esc(m.earlier.map((e) => `${e.stage} ${day(e.at)}`).join(' · '))}</div>` : ''}</td>
         <td style="padding:8px 10px;font-family:monospace;font-size:12px;border-top:1px solid ${COL.border};white-space:nowrap;">${ratingHtml(m.rating, { sep: ' &rarr; ', label: true })}</td>
         <td style="padding:8px 10px;font-family:monospace;font-size:12px;color:${COL.muted};border-top:1px solid ${COL.border};white-space:nowrap;">${esc(day(m.at))}</td>
       </tr>`

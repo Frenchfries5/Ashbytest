@@ -47,14 +47,16 @@ const MEGAN = 'Megan Kidd'
 
 // Gather the same data the Executive Summary tab shows and render the email HTML. No sending,
 // no recipients, no mail send — used by both the send path and the ?preview branch.
-async function buildEmail(week: 'current' | 'last' = 'current') {
+// weeksAgo: 0 = the week being closed out, 1 = last week, and so on. The send path only ever
+// uses 0; larger values come from ?preview for checking how a past week would have read.
+async function buildEmail(weeksAgo = 0) {
   const [weeks, ashbyRes, hireRes, pipelineOutcomes, funnel, digest, settings] = await Promise.all([
     getWeeklySourcing(),
     getAshbyWeeklyRows(),
     getWeeklyHireCounts(),
     getPipelineOutcomes(),
     getRecruiterScreenFunnel(12),
-    getWeeklyDigest({ weeksAgo: week === 'last' ? 1 : 0 }),
+    getWeeklyDigest({ weeksAgo }),
     supabase.from('site_state').select('email_feedback_prompt').eq('id', 1).maybeSingle(),
   ])
 
@@ -129,8 +131,9 @@ export async function GET(req: NextRequest) {
       }
       // ?week=last previews the previous week, which is useful early in a week when the
       // current one has no activity yet.
-      const week = req.nextUrl.searchParams.get('week') === 'last' ? 'last' : 'current'
-      const { html } = await buildEmail(week)
+      const raw = req.nextUrl.searchParams.get('weeksAgo')
+      const n = raw != null ? Number(raw) : req.nextUrl.searchParams.get('week') === 'last' ? 1 : 0
+      const { html } = await buildEmail(Number.isFinite(n) && n > 0 ? Math.floor(n) : 0)
       return new NextResponse(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } })
     }
     if (!authorized(req)) {

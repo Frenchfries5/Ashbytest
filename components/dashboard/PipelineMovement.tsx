@@ -20,7 +20,7 @@ interface Digest {
   weekEnd: string
   newApplications: number
   screened: { name: string; at: string; rating: Rating }[]
-  movements: { name: string; stage: string; at: string; rating: Rating }[]
+  movements: { name: string; stage: string; at: string; earlier: { stage: string; at: string }[]; rating: Rating }[]
   ratings: { average: number | null; count: number; distribution: Record<string, number> }
 }
 
@@ -92,6 +92,7 @@ export function PipelineMovement({ role = 'growth' }: { role?: string }) {
   const stats = [
     { label: 'New applications', value: data?.newApplications ?? 0, color: C.blue },
     { label: 'Screened', value: data?.screened.length ?? 0, color: C.text },
+    // Counts people, not interviews — two rounds in one week is one person moving forward.
     { label: 'Moved forward', value: data?.movements.length ?? 0, color: C.green },
   ]
   const avg = data?.ratings.average
@@ -151,10 +152,17 @@ export function PipelineMovement({ role = 'growth' }: { role?: string }) {
             <tbody>
               {data.movements.map((m, i) => (
                 <tr key={`${m.name}-${m.stage}-${m.at}`} style={{ borderBottom: i < data.movements.length - 1 ? `1px solid ${C.border}` : 'none' }}>
-                  <td className="px-4 py-2.5" style={{ color: C.text }}>{m.name}</td>
-                  <td className="px-4 py-2.5" style={{ color: C.text }}>{m.stage}</td>
-                  <td className="px-4 py-2.5 whitespace-nowrap"><RatingChain rating={m.rating} /></td>
-                  <td className="px-4 py-2.5 text-right whitespace-nowrap" style={{ color: C.muted }}>{day(m.at)}</td>
+                  <td className="px-4 py-2.5 align-top" style={{ color: C.text }}>{m.name}</td>
+                  <td className="px-4 py-2.5 align-top" style={{ color: C.text }}>
+                    {m.stage}
+                    {!!m.earlier?.length && (
+                      <span className="block text-[10.5px] mt-0.5" style={{ color: C.dim }}>
+                        after {m.earlier.map((e) => `${e.stage} ${day(e.at)}`).join(' · ')}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 align-top whitespace-nowrap"><RatingChain rating={m.rating} /></td>
+                  <td className="px-4 py-2.5 align-top text-right whitespace-nowrap" style={{ color: C.muted }}>{day(m.at)}</td>
                 </tr>
               ))}
             </tbody>
