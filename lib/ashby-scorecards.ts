@@ -43,6 +43,20 @@ export interface BandStat {
   hireRate: number | null // of decided (hired + archived) applications
 }
 
+// Every scorecard a hired candidate collected, so the aggregate above can be opened up and read
+// person by person — who interviewed them, at what stage, and what they gave.
+export interface HireDetail {
+  applicationId: string
+  name: string
+  role: string | null
+  hiredAt: string | null // approximated by the application's last transition
+  avg: number
+  count: number
+  low: number
+  high: number
+  scores: { score: number; stage: string | null; interviewer: string; at: string | null }[]
+}
+
 export interface ScorecardAnalytics {
   configured: boolean
   jobId: string | null
@@ -59,6 +73,7 @@ export interface ScorecardAnalytics {
   bands: BandStat[]
   stages: StageStat[]
   interviewers: InterviewerStat[]
+  hires: HireDetail[]
   roles: { id: string; title: string; n: number }[]
 }
 
@@ -81,9 +96,10 @@ interface FeedbackRow {
   application_id: string | null
   overall_recommendation: number | null
   submitted_by: string | null
+  submitted_at: string | null
   event_id: string | null
 }
-interface AppRow { id: string; job_id: string | null; status: string | null }
+interface AppRow { id: string; job_id: string | null; status: string | null; candidate_name: string | null; updated_at: string | null }
 interface EventRow { event_id: string; stage_title: string | null }
 
 export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}): Promise<ScorecardAnalytics> {
@@ -92,7 +108,7 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
   const empty: ScorecardAnalytics = {
     configured: false, jobId,
     totals: { scorecards: 0, applications: 0, interviewers: 0, avgHired: null, avgArchived: null, hiredCount: 0, archivedCount: 0, unresolvedStage: 0 },
-    bands: [], stages: [], interviewers: [], roles: [],
+    bands: [], stages: [], interviewers: [], hires: [], roles: [],
   }
 
   const [feedback, apps, events, jobRows] = await Promise.all([
@@ -100,9 +116,9 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
     // blob (which carries the entire form definition) doesn't come across the wire.
     selectAll<FeedbackRow>(
       'ashby_feedback',
-      'application_id, overall_recommendation, submitted_by, event_id:raw->>interviewEventId'
+      'application_id, overall_recommendation, submitted_by, submitted_at, event_id:raw->>interviewEventId'
     ),
-    selectAll<AppRow>('ashby_applications', 'id, job_id, status'),
+    selectAll<AppRow>('ashby_applications', 'id, job_id, status, candidate_name, updated_at'),
     selectAll<EventRow>('ashby_interviews', 'event_id, stage_title'),
     selectAll<{ id: string; title: string | null }>('ashby_jobs', 'id, title'),
   ])
@@ -183,14 +199,22 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
 
   // ── per-application: outcome splits and score bands ───────────────────────────
   const perApp = new Map<string, number[]>()
+  const cardsByApp = new Map<string, HireDetail['scores']>()
   for (const f of scored) {
     const id = f.application_id as string
-    if (!perApp.has(id)) perApp.set(id, [])
+    if (!perApp.has(id)) { perApp.set(id, []); cardsByApp.set(id, []) }
     perApp.get(id)!.push(f.overall_recommendation as number)
+    cardsByApp.get(id)!.push({
+      score: f.overall_recommendation as number,
+      stage: (f.event_id && stageByEvent.get(f.event_id)) || null,
+      interviewer: f.submitted_by?.trim() || 'Unattributed',
+      at: f.submitted_at,
+    })
   }
 
   const hiredAvgs: number[] = []
   const archivedAvgs: number[] = []
+  const hires: HireDetail[] = []
   const bandAcc = new Map<number, { hired: number; archived: number; active: number }>()
   for (const b of SCALE) bandAcc.set(b, { hired: 0, archived: 0, active: 0 })
 
@@ -198,8 +222,18 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
     const a = appById.get(id)
     if (!a) continue
     const avg = mean(xs) as number
-    if (a.status === 'Hired') hiredAvgs.push(avg)
-    else if (a.status === 'Archived') archivedAvgs.push(avg)
+    if (a.status === 'Hired') {
+      hiredAvgs.push(avg)
+      const cards = (cardsByApp.get(id) ?? []).slice().sort((x, y) => (x.at ?? '').localeCompare(y.at ?? ''))
+      hires.push({
+        applicationId: id,
+        name: a.candidate_name ?? 'Unnamed candidate',
+        role: a.job_id ? titleByJob.get(a.job_id) ?? null : null,
+        hiredAt: a.updated_at,
+        avg, count: xs.length, low: Math.min(...xs), high: Math.max(...xs),
+        scores: cards,
+      })
+    } else if (a.status === 'Archived') archivedAvgs.push(avg)
 
     // Bands round to the nearest whole point, so a 3.5 average sits with the 4s.
     const band = Math.min(4, Math.max(1, Math.round(avg)))
@@ -238,6 +272,8 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
     bands,
     stages,
     interviewers,
+    // Most recent hire first — the useful reading order when checking recent decisions.
+    hires: hires.sort((a, b) => (b.hiredAt ?? '').localeCompare(a.hiredAt ?? '')),
     roles,
   }
 }

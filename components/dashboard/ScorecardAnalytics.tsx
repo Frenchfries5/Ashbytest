@@ -22,6 +22,17 @@ const scoreColor = (n: number) => (n >= 4 ? C.green : n === 3 ? C.blue : n === 2
 interface StageStat { stage: string; n: number; avg: number; dist: Record<string, number> }
 interface InterviewerStat { name: string; n: number; avg: number; vsStage: number | null; dist: Record<string, number>; topStage: string | null }
 interface BandStat { band: number; apps: number; hired: number; archived: number; active: number; hireRate: number | null }
+interface HireDetail {
+  applicationId: string
+  name: string
+  role: string | null
+  hiredAt: string | null
+  avg: number
+  count: number
+  low: number
+  high: number
+  scores: { score: number; stage: string | null; interviewer: string; at: string | null }[]
+}
 interface Analytics {
   configured: boolean
   totals: {
@@ -32,6 +43,7 @@ interface Analytics {
   bands: BandStat[]
   stages: StageStat[]
   interviewers: InterviewerStat[]
+  hires: HireDetail[]
   roles: { id: string; title: string; n: number }[]
   error?: string
 }
@@ -53,9 +65,57 @@ function DistBar({ dist, total }: { dist: Record<string, number>; total: number 
 
 const f1 = (n: number | null | undefined) => (n == null ? '—' : n.toFixed(1))
 const f2 = (n: number | null | undefined) => (n == null ? '—' : n.toFixed(2))
+const day = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '—'
+
+// One hire, expandable into every scorecard they collected in submission order.
+function HireRow({ h, open, onToggle, last }: { h: HireDetail; open: boolean; onToggle: () => void; last: boolean }) {
+  const unanimous = h.low === h.high
+  return (
+    <>
+      <tr
+        onClick={onToggle}
+        className="cursor-pointer"
+        style={{ borderBottom: open || !last ? `1px solid ${C.border}` : 'none' }}
+      >
+        <td className="px-4 py-2.5" style={{ color: C.text }}>
+          <span style={{ color: C.dim }}>{open ? '▾' : '▸'}</span> {h.name}
+        </td>
+        <td className="px-4 py-2.5" style={{ color: C.dim }}>{h.role ?? '—'}</td>
+        <td className="px-4 py-2.5 text-right" style={{ color: scoreColor(Math.round(h.avg)) }}>{f2(h.avg)}</td>
+        <td className="px-4 py-2.5 text-right" style={{ color: C.muted }}>{h.count}</td>
+        <td className="px-4 py-2.5 text-right" style={{ color: unanimous ? C.dim : C.amber }}>
+          {unanimous ? `all ${h.low}` : `${h.low}–${h.high}`}
+        </td>
+        <td className="px-4 py-2.5 text-right whitespace-nowrap" style={{ color: C.muted }}>{day(h.hiredAt)}</td>
+      </tr>
+      {open && (
+        <tr style={{ borderBottom: last ? 'none' : `1px solid ${C.border}` }}>
+          <td colSpan={6} className="px-4 py-3" style={{ background: C.bg }}>
+            <table className="w-full text-left font-mono text-[11px]">
+              <tbody>
+                {h.scores.map((s, i) => (
+                  <tr key={i}>
+                    <td className="py-1 pr-4 whitespace-nowrap" style={{ color: scoreColor(s.score), width: 110 }}>
+                      {s.score} <span style={{ color: C.dim }}>{RATING_LABEL[String(s.score)]}</span>
+                    </td>
+                    <td className="py-1 pr-4" style={{ color: C.text }}>{s.stage ?? <span style={{ color: C.dim }}>stage not matched</span>}</td>
+                    <td className="py-1 pr-4" style={{ color: C.muted }}>{s.interviewer}</td>
+                    <td className="py-1 text-right whitespace-nowrap" style={{ color: C.dim }}>{day(s.at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
 
 export function ScorecardAnalytics() {
   const [jobId, setJobId] = useState<string>('')
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const { data, isLoading } = useSWR<Analytics>(
     `/api/ashby/scorecards${jobId ? `?jobId=${encodeURIComponent(jobId)}` : ''}`,
     fetcher, { refreshInterval: 300_000, keepPreviousData: true }
@@ -74,6 +134,7 @@ export function ScorecardAnalytics() {
   const t = data?.totals
   const spread = t?.avgHired != null && t?.avgArchived != null ? t.avgHired - t.avgArchived : null
   const maxStageN = Math.max(1, ...(data?.stages ?? []).map((s) => s.n))
+  const allOpen = !!data?.hires?.length && expanded.size === data.hires.length
 
   const kpis = [
     { label: 'Scorecards', value: (t?.scorecards ?? 0).toLocaleString(), sub: `${t?.applications ?? 0} candidates · ${t?.interviewers ?? 0} interviewers`, color: C.text },
@@ -156,6 +217,59 @@ export function ScorecardAnalytics() {
           count against a band yet.
         </p>
       </div>
+
+      {/* Hires, opened up */}
+      {!!(data?.hires ?? []).length && (
+        <div>
+          <div className="flex items-end justify-between gap-3 flex-wrap mb-1">
+            <span className={`${UPLABEL} block`} style={{ color: C.muted }}>Hires — full scorecard breakdown</span>
+            <button
+              onClick={() => setExpanded(allOpen ? new Set() : new Set((data?.hires ?? []).map((h) => h.applicationId)))}
+              className="font-mono text-[11px] px-2 py-1 rounded-md"
+              style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.muted, cursor: 'pointer' }}
+            >
+              {allOpen ? 'Collapse all' : 'Expand all'}
+            </button>
+          </div>
+          <span className="font-mono text-[11px] block mb-3" style={{ color: C.dim }}>
+            Click a name for every scorecard they collected · &ldquo;Range&rdquo; flags where the panel disagreed
+          </span>
+          <div className="rounded-lg overflow-hidden" style={CARD}>
+            <table className="w-full text-left font-mono text-xs">
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <th className="px-4 py-3 font-normal" style={{ color: C.dim }}>Candidate</th>
+                  <th className="px-4 py-3 font-normal" style={{ color: C.dim }}>Role</th>
+                  <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Avg</th>
+                  <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Scorecards</th>
+                  <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Range</th>
+                  <th className="px-4 py-3 font-normal text-right" style={{ color: C.dim }}>Hired</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data?.hires ?? []).map((h, i, arr) => (
+                  <HireRow
+                    key={h.applicationId}
+                    h={h}
+                    open={expanded.has(h.applicationId)}
+                    last={i === arr.length - 1}
+                    onToggle={() => setExpanded((prev) => {
+                      const next = new Set(prev)
+                      if (next.has(h.applicationId)) next.delete(h.applicationId)
+                      else next.add(h.applicationId)
+                      return next
+                    })}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="font-mono text-[10.5px] mt-2 leading-relaxed" style={{ color: C.dim }}>
+            Hire date is approximated by the application&rsquo;s last transition — Ashby doesn&rsquo;t expose a
+            dedicated hire-date field.
+          </p>
+        </div>
+      )}
 
       {/* Stage baselines */}
       <div>
