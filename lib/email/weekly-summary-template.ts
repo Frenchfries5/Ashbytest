@@ -12,8 +12,8 @@ import type { OutboundScorecard, HiresScorecard } from '@/lib/executive-summary'
 export interface WeeklyDigest {
   reqs: string[]
   newApplications: number
-  screened: { name: string; at: string }[]
-  movements: { name: string; stage: string; at: string }[]
+  screened: { name: string; at: string; rating: { latest: number | null; count: number } }[]
+  movements: { name: string; stage: string; at: string; rating: { latest: number | null; count: number } }[]
   ratings: { average: number | null; count: number; distribution: Record<string, number> }
 }
 
@@ -82,6 +82,8 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
   const { outbound: o, hires: h, growthPipeline, siteUrl, feedbackPrompt, digest } = data
 
   const RATING_LABEL: Record<string, string> = { '4': 'Strong yes', '3': 'Yes', '2': 'No', '1': 'Strong no' }
+  // 4/3 advance, 2/1 don't — colour so a low-scoring advance is visible at a glance.
+  const ratingColor = (n: number) => (n >= 4 ? '#1a9e6e' : n === 3 ? '#2f6fd0' : n === 2 ? '#b8791a' : '#c0392b')
   const day = (isoStr: string) =>
     new Date(isoStr).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
 
@@ -113,6 +115,7 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
       (m) => `<tr>
         <td style="padding:8px 10px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:${COL.text};border-top:1px solid ${COL.border};">${esc(m.name)}</td>
         <td style="padding:8px 10px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:${COL.text};border-top:1px solid ${COL.border};">${esc(m.stage)}</td>
+        <td style="padding:8px 10px;font-family:monospace;font-size:12px;border-top:1px solid ${COL.border};white-space:nowrap;color:${m.rating?.latest != null ? ratingColor(m.rating.latest) : COL.dim};">${m.rating?.latest != null ? esc(`${m.rating.latest} ${RATING_LABEL[String(m.rating.latest)] ?? ''}`) : '—'}</td>
         <td style="padding:8px 10px;font-family:monospace;font-size:12px;color:${COL.muted};border-top:1px solid ${COL.border};white-space:nowrap;">${esc(day(m.at))}</td>
       </tr>`
     )
@@ -127,6 +130,7 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
                 <tr>
                   <th align="left" style="padding:8px 10px;font-family:monospace;font-size:10.5px;text-transform:uppercase;color:${COL.dim};font-weight:normal;">Candidate</th>
                   <th align="left" style="padding:8px 10px;font-family:monospace;font-size:10.5px;text-transform:uppercase;color:${COL.dim};font-weight:normal;">Advanced to</th>
+                  <th align="left" style="padding:8px 10px;font-family:monospace;font-size:10.5px;text-transform:uppercase;color:${COL.dim};font-weight:normal;">Rating</th>
                   <th align="left" style="padding:8px 10px;font-family:monospace;font-size:10.5px;text-transform:uppercase;color:${COL.dim};font-weight:normal;">When</th>
                 </tr>
                 ${movementRows}
@@ -141,7 +145,7 @@ export function renderWeeklySummaryEmail(data: WeeklySummaryData): { subject: st
       ? `<tr><td style="padding:16px 18px 0;">
           <div style="font-family:monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:${COL.dim};margin-bottom:8px;">Screened this week</div>
           <div style="background:${COL.surface};border:1px solid ${COL.border};border-radius:10px;padding:12px 14px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.6;color:${COL.text};">
-            ${d.screened.map((s) => `${esc(s.name)} <span style="color:${COL.dim};font-family:monospace;font-size:11.5px;">${esc(day(s.at))}</span>`).join(' &nbsp;·&nbsp; ')}
+            ${d.screened.map((s) => `${esc(s.name)}${s.rating?.latest != null ? ` <span style="color:${ratingColor(s.rating.latest)};font-family:monospace;font-size:11.5px;">${s.rating.latest}</span>` : ''} <span style="color:${COL.dim};font-family:monospace;font-size:11.5px;">${esc(day(s.at))}</span>`).join(' &nbsp;·&nbsp; ')}
           </div>
         </td></tr>`
       : ''

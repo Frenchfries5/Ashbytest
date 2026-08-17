@@ -19,6 +19,14 @@ const ROLE_REQ: Record<string, RegExp> = {
 const EARLY_STAGE = /new lead|reached out|replied|application review|holding tank|recruiter screen|introduction call|sourced/i
 const SCREEN_STAGE = /recruiter screen|introduction call/i
 
+// A candidate's scorecard standing as of the end of the week being viewed. Scores submitted after
+// that week are deliberately excluded, so looking back at a past week shows what was known then
+// rather than leaking later assessments into it.
+export interface CandidateRating {
+  latest: number | null // most recent overall recommendation (1-4, 4 = strong yes)
+  count: number
+}
+
 export interface WeeklyDigest {
   configured: boolean
   role: string
@@ -26,8 +34,8 @@ export interface WeeklyDigest {
   weekStart: string
   weekEnd: string
   newApplications: number
-  screened: { name: string; at: string }[]
-  movements: { name: string; stage: string; at: string; source: string | null }[]
+  screened: { name: string; at: string; rating: CandidateRating }[]
+  movements: { name: string; stage: string; at: string; source: string | null; rating: CandidateRating }[]
   ratings: { average: number | null; count: number; distribution: Record<string, number> }
 }
 
@@ -76,9 +84,30 @@ export async function getWeeklyDigest(opts: { role?: string; weeksAgo?: number }
   const apps = appRows.filter((a) => a.job_id && reqIds.has(a.job_id))
   const appById = new Map(apps.map((a) => [a.id, a]))
 
-  const events = await selectAll<{ application_id: string | null; stage_title: string | null; start_time: string }>(
-    'ashby_interviews', 'application_id, stage_title, start_time'
-  )
+  const [events, feedback] = await Promise.all([
+    selectAll<{ application_id: string | null; stage_title: string | null; start_time: string }>(
+      'ashby_interviews', 'application_id, stage_title, start_time'
+    ),
+    selectAll<{ application_id: string | null; overall_recommendation: number | null; submitted_at: string | null }>(
+      'ashby_feedback', 'application_id, overall_recommendation, submitted_at'
+    ),
+  ])
+
+  // Per-application scorecard standing as of this week's end (see CandidateRating). Sorted by
+  // submission time first, so the last write genuinely is the most recent score.
+  const ratingByApp = new Map<string, CandidateRating>()
+  const scored = feedback
+    .filter((f) => f.application_id && f.overall_recommendation != null && f.submitted_at)
+    .sort((a, b) => (a.submitted_at ?? '').localeCompare(b.submitted_at ?? ''))
+  for (const f of scored) {
+    const t = Date.parse(f.submitted_at as string)
+    if (isNaN(t) || t >= end) continue // ignore scores submitted after the week being viewed
+    const cur = ratingByApp.get(f.application_id as string) ?? { latest: null, count: 0 }
+    cur.count += 1
+    cur.latest = f.overall_recommendation as number
+    ratingByApp.set(f.application_id as string, cur)
+  }
+  const ratingOf = (appId: string): CandidateRating => ratingByApp.get(appId) ?? { latest: null, count: 0 }
 
   const movements: WeeklyDigest['movements'] = []
   const screened: WeeklyDigest['screened'] = []
@@ -91,22 +120,19 @@ export async function getWeeklyDigest(opts: { role?: string; weeksAgo?: number }
     if (isNaN(t) || t < start || t >= end) continue
     const name = a.candidate_name ?? 'Unnamed candidate'
     if (SCREEN_STAGE.test(e.stage_title)) {
-      screened.push({ name, at: new Date(t).toISOString() })
+      screened.push({ name, at: new Date(t).toISOString(), rating: ratingOf(e.application_id) })
     } else if (!EARLY_STAGE.test(e.stage_title)) {
       // One row per candidate+stage, so a rescheduled round isn't listed twice.
       const k = `${e.application_id}|${e.stage_title}`
       if (seenMove.has(k)) continue
       seenMove.add(k)
-      movements.push({ name, stage: e.stage_title, at: new Date(t).toISOString(), source: a.source })
+      movements.push({ name, stage: e.stage_title, at: new Date(t).toISOString(), source: a.source, rating: ratingOf(e.application_id) })
     }
   }
   movements.sort((x, y) => x.at.localeCompare(y.at))
   screened.sort((x, y) => x.at.localeCompare(y.at))
 
   // Scorecards submitted during the week, for this req's applications.
-  const feedback = await selectAll<{ application_id: string | null; overall_recommendation: number | null; submitted_at: string | null }>(
-    'ashby_feedback', 'application_id, overall_recommendation, submitted_at'
-  )
   const scores: number[] = []
   const distribution: Record<string, number> = { '1': 0, '2': 0, '3': 0, '4': 0 }
   for (const f of feedback) {
