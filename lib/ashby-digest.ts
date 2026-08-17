@@ -24,7 +24,7 @@ const SCREEN_STAGE = /recruiter screen|introduction call/i
 // rather than leaking later assessments into it.
 export interface CandidateRating {
   latest: number | null // most recent overall recommendation (1-4, 4 = strong yes)
-  previous: number | null // the score before it, when more than one scorecard exists
+  history: number[] // every score in submission order, oldest first; last entry === latest
   count: number
 }
 
@@ -103,14 +103,14 @@ export async function getWeeklyDigest(opts: { role?: string; weeksAgo?: number }
   for (const f of scored) {
     const t = Date.parse(f.submitted_at as string)
     if (isNaN(t) || t >= end) continue // ignore scores submitted after the week being viewed
-    const cur = ratingByApp.get(f.application_id as string) ?? { latest: null, previous: null, count: 0 }
+    const cur = ratingByApp.get(f.application_id as string) ?? { latest: null, history: [], count: 0 }
     cur.count += 1
-    cur.previous = cur.latest // the score this one supersedes — shown so a swing is visible
     cur.latest = f.overall_recommendation as number
+    cur.history.push(cur.latest) // full chain, so the direction of travel across rounds is visible
     ratingByApp.set(f.application_id as string, cur)
   }
   const ratingOf = (appId: string): CandidateRating =>
-    ratingByApp.get(appId) ?? { latest: null, previous: null, count: 0 }
+    ratingByApp.get(appId) ?? { latest: null, history: [], count: 0 }
 
   const movements: WeeklyDigest['movements'] = []
   const screened: WeeklyDigest['screened'] = []

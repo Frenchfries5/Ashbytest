@@ -12,7 +12,7 @@ import useSWR from 'swr'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
-interface Rating { latest: number | null; previous: number | null; count: number }
+interface Rating { latest: number | null; history: number[]; count: number }
 interface Digest {
   configured: boolean
   reqs: string[]
@@ -35,16 +35,21 @@ const RATING_LABEL: Record<string, string> = { '4': 'Strong yes', '3': 'Yes', '2
 // 4/3 are advance signals, 2/1 are not — colour them so a low-scoring advance stands out.
 const ratingColor = (n: number) => (n >= 4 ? C.green : n === 3 ? C.blue : n === 2 ? C.amber : '#f87171')
 
-// Multiple scorecards show as "3 → 4 Strong yes": the score being superseded, then the current one,
-// so a candidate whose read improved (or dropped) between rounds is visible without opening Ashby.
-function RatingCell({ rating }: { rating: Rating }) {
-  if (rating?.latest == null) return <span style={{ color: C.dim }}>—</span>
+// Multiple scorecards show as the whole chain — "2 → 3 → 4 Strong yes" — oldest first, each score
+// coloured on its own scale, so the direction of travel across scorecards reads without opening Ashby.
+// Only the current score carries the word label; the earlier ones would just be noise.
+function RatingChain({ rating }: { rating: Rating }) {
+  const chain = rating?.history?.length ? rating.history : rating?.latest != null ? [rating.latest] : []
+  if (!chain.length) return <span style={{ color: C.dim }}>—</span>
   return (
-    <span style={{ color: ratingColor(rating.latest) }}>
-      {rating.previous != null && (
-        <span style={{ color: ratingColor(rating.previous) }}>{rating.previous} <span style={{ color: C.dim }}>→</span> </span>
-      )}
-      {rating.latest} <span style={{ color: C.dim }}>{RATING_LABEL[String(rating.latest)]}</span>
+    <span>
+      {chain.map((n, i) => (
+        <span key={i} style={{ color: ratingColor(n) }}>
+          {i > 0 && <span style={{ color: C.dim }}> → </span>}
+          {n}
+        </span>
+      ))}{' '}
+      <span style={{ color: C.dim }}>{RATING_LABEL[String(chain[chain.length - 1])]}</span>
     </span>
   )
 }
@@ -148,7 +153,7 @@ export function PipelineMovement({ role = 'growth' }: { role?: string }) {
                 <tr key={`${m.name}-${m.stage}-${m.at}`} style={{ borderBottom: i < data.movements.length - 1 ? `1px solid ${C.border}` : 'none' }}>
                   <td className="px-4 py-2.5" style={{ color: C.text }}>{m.name}</td>
                   <td className="px-4 py-2.5" style={{ color: C.text }}>{m.stage}</td>
-                  <td className="px-4 py-2.5 whitespace-nowrap"><RatingCell rating={m.rating} /></td>
+                  <td className="px-4 py-2.5 whitespace-nowrap"><RatingChain rating={m.rating} /></td>
                   <td className="px-4 py-2.5 text-right whitespace-nowrap" style={{ color: C.muted }}>{day(m.at)}</td>
                 </tr>
               ))}
@@ -171,9 +176,13 @@ export function PipelineMovement({ role = 'growth' }: { role?: string }) {
                 {i > 0 && <span style={{ color: C.dim }}> · </span>}
                 {s.name}{' '}
                 {s.rating?.latest != null && (
-                  <span style={{ color: ratingColor(s.rating.latest) }}>
-                    {s.rating.previous != null && <span style={{ color: C.dim }}>{s.rating.previous}→</span>}
-                    {s.rating.latest}{' '}
+                  <span>
+                    {(s.rating.history?.length ? s.rating.history : [s.rating.latest]).map((n, j) => (
+                      <span key={j} style={{ color: ratingColor(n) }}>
+                        {j > 0 && <span style={{ color: C.dim }}>→</span>}
+                        {n}
+                      </span>
+                    ))}{' '}
                   </span>
                 )}
                 <span style={{ color: C.dim }}>{day(s.at)}</span>
