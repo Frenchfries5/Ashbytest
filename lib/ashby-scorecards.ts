@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { loadScorecards, dedupeScorecards } from './ashby-feedback'
 
 // Scorecard analytics: what the 1-4 overall recommendations actually tell us, read against the
 // outcome each candidate ended up with.
@@ -13,6 +14,9 @@ import { supabase } from './supabase'
 //  2. A candidate carries several scorecards. Anything per-candidate (outcome splits, score bands)
 //     uses the mean of that application's scores, so a panel of four doesn't outvote a single
 //     screen four times over.
+//
+// Row de-duplication and interviewer attribution (a scorecard belongs to whoever it is credited
+// to, not whoever typed it) both happen in lib/ashby-feedback.ts.
 
 const SCALE = [1, 2, 3, 4] as const
 
@@ -92,13 +96,6 @@ async function selectAll<T>(table: string, columns: string): Promise<T[]> {
   return out
 }
 
-interface FeedbackRow {
-  application_id: string | null
-  overall_recommendation: number | null
-  submitted_by: string | null
-  submitted_at: string | null
-  event_id: string | null
-}
 interface AppRow { id: string; job_id: string | null; status: string | null; candidate_name: string | null; updated_at: string | null }
 interface EventRow { event_id: string; stage_title: string | null }
 
@@ -112,12 +109,7 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
   }
 
   const [feedback, apps, events, jobRows] = await Promise.all([
-    // The interview event id lives in the raw payload; pulled by JSON path so the whole scorecard
-    // blob (which carries the entire form definition) doesn't come across the wire.
-    selectAll<FeedbackRow>(
-      'ashby_feedback',
-      'application_id, overall_recommendation, submitted_by, submitted_at, event_id:raw->>interviewEventId'
-    ),
+    loadScorecards().then(dedupeScorecards),
     selectAll<AppRow>('ashby_applications', 'id, job_id, status, candidate_name, updated_at'),
     selectAll<EventRow>('ashby_interviews', 'event_id, stage_title'),
     selectAll<{ id: string; title: string | null }>('ashby_jobs', 'id, title'),
@@ -132,8 +124,8 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
   // before the job filter is applied so switching roles never empties the picker.
   const roleCount = new Map<string, number>()
   for (const f of feedback) {
-    const a = f.application_id ? appById.get(f.application_id) : undefined
-    if (a?.job_id && f.overall_recommendation != null) roleCount.set(a.job_id, (roleCount.get(a.job_id) ?? 0) + 1)
+    const a = appById.get(f.applicationId)
+    if (a?.job_id) roleCount.set(a.job_id, (roleCount.get(a.job_id) ?? 0) + 1)
   }
   const roles = [...roleCount.entries()]
     .map(([id, n]) => ({ id, title: titleByJob.get(id) ?? 'Untitled role', n }))
@@ -141,8 +133,7 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
     .sort((a, b) => b.n - a.n)
 
   const scored = feedback.filter((f) => {
-    if (f.overall_recommendation == null || !f.application_id) return false
-    const a = appById.get(f.application_id)
+    const a = appById.get(f.applicationId)
     if (!a) return false
     return !jobId || a.job_id === jobId
   })
@@ -153,9 +144,9 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
   const stageDist = new Map<string, Record<string, number>>()
   let unresolvedStage = 0
   for (const f of scored) {
-    const stage = (f.event_id && stageByEvent.get(f.event_id)) || null
+    const stage = (f.eventId && stageByEvent.get(f.eventId)) || null
     if (!stage) { unresolvedStage++; continue }
-    const n = f.overall_recommendation as number
+    const n = f.score
     if (!stageScores.has(stage)) { stageScores.set(stage, []); stageDist.set(stage, emptyDist()) }
     stageScores.get(stage)!.push(n)
     stageDist.get(stage)![String(n)] += 1
@@ -173,13 +164,13 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
   interface Acc { scores: number[]; dist: Record<string, number>; devs: number[]; stages: Map<string, number> }
   const byPerson = new Map<string, Acc>()
   for (const f of scored) {
-    const name = f.submitted_by?.trim() || 'Unattributed'
-    const n = f.overall_recommendation as number
+    const name = f.interviewer
+    const n = f.score
     if (!byPerson.has(name)) byPerson.set(name, { scores: [], dist: emptyDist(), devs: [], stages: new Map() })
     const acc = byPerson.get(name)!
     acc.scores.push(n)
     acc.dist[String(n)] += 1
-    const stage = (f.event_id && stageByEvent.get(f.event_id)) || null
+    const stage = (f.eventId && stageByEvent.get(f.eventId)) || null
     if (stage) {
       acc.stages.set(stage, (acc.stages.get(stage) ?? 0) + 1)
       const base = stageAvg.get(stage)
@@ -201,14 +192,14 @@ export async function getScorecardAnalytics(opts: { jobId?: string | null } = {}
   const perApp = new Map<string, number[]>()
   const cardsByApp = new Map<string, HireDetail['scores']>()
   for (const f of scored) {
-    const id = f.application_id as string
+    const id = f.applicationId
     if (!perApp.has(id)) { perApp.set(id, []); cardsByApp.set(id, []) }
-    perApp.get(id)!.push(f.overall_recommendation as number)
+    perApp.get(id)!.push(f.score)
     cardsByApp.get(id)!.push({
-      score: f.overall_recommendation as number,
-      stage: (f.event_id && stageByEvent.get(f.event_id)) || null,
-      interviewer: f.submitted_by?.trim() || 'Unattributed',
-      at: f.submitted_at,
+      score: f.score,
+      stage: (f.eventId && stageByEvent.get(f.eventId)) || null,
+      interviewer: f.interviewer,
+      at: f.submittedAt,
     })
   }
 

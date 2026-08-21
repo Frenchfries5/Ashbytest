@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { queryApplications } from './ashby-cache'
 import { DAY, weekStartUTC } from './week'
+import { loadScorecards, dedupeScorecards } from './ashby-feedback'
 
 // What actually happened on a req during one week — named, not aggregated. Built for the Friday
 // email: aggregate rates answer "how are we doing", but a weekly read wants "who moved, to what,
@@ -101,25 +102,23 @@ export async function getWeeklyDigest(opts: { role?: string; weeksAgo?: number }
     selectAll<{ application_id: string | null; stage_title: string | null; start_time: string }>(
       'ashby_interviews', 'application_id, stage_title, start_time'
     ),
-    selectAll<{ application_id: string | null; overall_recommendation: number | null; submitted_at: string | null }>(
-      'ashby_feedback', 'application_id, overall_recommendation, submitted_at'
-    ),
+    loadScorecards(),
   ])
 
-  // Per-application scorecard standing as of this week's end (see CandidateRating). Sorted by
-  // submission time first, so the last write genuinely is the most recent score.
+  // Per-application scorecard standing as of this week's end (see CandidateRating). Filter to the
+  // week first, then dedupe, so a slot re-submitted later doesn't retroactively change what a past
+  // week showed.
   const ratingByApp = new Map<string, CandidateRating>()
-  const scored = feedback
-    .filter((f) => f.application_id && f.overall_recommendation != null && f.submitted_at)
-    .sort((a, b) => (a.submitted_at ?? '').localeCompare(b.submitted_at ?? ''))
-  for (const f of scored) {
-    const t = Date.parse(f.submitted_at as string)
-    if (isNaN(t) || t >= end) continue // ignore scores submitted after the week being viewed
-    const cur = ratingByApp.get(f.application_id as string) ?? { latest: null, history: [], count: 0 }
+  const asOfWeek = feedback.filter((f) => {
+    const t = f.submittedAt ? Date.parse(f.submittedAt) : NaN
+    return !isNaN(t) && t < end // ignore scores submitted after the week being viewed
+  })
+  for (const f of dedupeScorecards(asOfWeek)) {
+    const cur = ratingByApp.get(f.applicationId) ?? { latest: null, history: [], count: 0 }
     cur.count += 1
-    cur.latest = f.overall_recommendation as number
+    cur.latest = f.score
     cur.history.push(cur.latest) // full chain, so the direction of travel across rounds is visible
-    ratingByApp.set(f.application_id as string, cur)
+    ratingByApp.set(f.applicationId, cur)
   }
   const ratingOf = (appId: string): CandidateRating =>
     ratingByApp.get(appId) ?? { latest: null, history: [], count: 0 }
@@ -165,13 +164,12 @@ export async function getWeeklyDigest(opts: { role?: string; weeksAgo?: number }
   // Scorecards submitted during the week, for this req's applications.
   const scores: number[] = []
   const distribution: Record<string, number> = { '1': 0, '2': 0, '3': 0, '4': 0 }
-  for (const f of feedback) {
-    if (!f.application_id || !appById.has(f.application_id)) continue
-    if (f.overall_recommendation == null || !f.submitted_at) continue
-    const t = Date.parse(f.submitted_at)
-    if (isNaN(t) || t < start || t >= end) continue
-    scores.push(f.overall_recommendation)
-    distribution[String(f.overall_recommendation)] = (distribution[String(f.overall_recommendation)] ?? 0) + 1
+  for (const f of dedupeScorecards(asOfWeek)) {
+    if (!appById.has(f.applicationId)) continue
+    const t = f.submittedAt ? Date.parse(f.submittedAt) : NaN
+    if (isNaN(t) || t < start) continue
+    scores.push(f.score)
+    distribution[String(f.score)] = (distribution[String(f.score)] ?? 0) + 1
   }
 
   const newApplications = apps.filter((a) => {
